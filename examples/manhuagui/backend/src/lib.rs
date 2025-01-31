@@ -53,7 +53,7 @@ pub enum MangaStatus {
     Completed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SChapter {
     pub url: String,
     pub name: String,
