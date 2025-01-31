@@ -1,2 +1,5 @@
 **/*.qmd-pure
+**/target
+**/output-rmpp
+**/output
 
