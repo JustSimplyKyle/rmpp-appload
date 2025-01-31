@@ -24,6 +24,7 @@ struct MyBackend {
 }
 
 impl MyBackend {
+    #[allow(clippy::too_many_lines)]
     async fn handle_message(
         &mut self,
         functionality: &BackendReplier,
@@ -110,6 +111,30 @@ impl MyBackend {
                 };
                 manga.next_chapter(&self.api).await?;
             }
+            6 => {
+                let State::Reading(manga) = &mut self.state else {
+                    bail!("invalid state, should be reading");
+                };
+                let manga = std::mem::take(manga);
+
+                let output = manga
+                    .chapters
+                    .iter()
+                    .map(|x| &*x.name)
+                    .collect::<Vec<&str>>()
+                    .join("\n");
+
+                self.state = State::ChapterList { output, manga };
+            }
+            7 => {
+                let State::ChapterList { manga, .. } = &mut self.state else {
+                    bail!("invalid state, should be reading");
+                };
+                let mut manga = std::mem::take(manga);
+                let index = message.contents.parse::<usize>()?;
+                manga.chapter = index;
+                self.state = State::Reading(manga);
+            }
             99 => {
                 if PathBuf::from("/tmp/mangarr").exists() {
                     remove_dir_all("/tmp/mangarr")?;
@@ -121,11 +146,16 @@ impl MyBackend {
         match &self.state {
             State::Idleing => {}
             State::Reading(manga_reader) => {
-                functionality.send_message(4, &manga_reader.page.to_string())?;
-                functionality.send_message(5, &(manga_reader.pages.len() - 1).to_string())?;
-                functionality.send_message(6, &manga_reader.chapter.to_string())?;
-                functionality.send_message(7, &(manga_reader.chapters.len() - 1).to_string())?;
+                functionality.send_message(4, &(manga_reader.page + 1).to_string())?;
+                functionality.send_message(5, &manga_reader.pages.len().to_string())?;
+                functionality.send_message(6, &(manga_reader.chapter + 1).to_string())?;
+                functionality.send_message(7, &manga_reader.chapters.len().to_string())?;
                 manga_reader.display(&self.api, functionality).await?;
+            }
+            State::ChapterList {
+                output: chapters, ..
+            } => {
+                functionality.send_message(8, chapters)?;
             }
         }
         Ok(())
@@ -134,9 +164,10 @@ impl MyBackend {
 
 enum State {
     Idleing,
+    ChapterList { output: String, manga: MangaReader },
     Reading(MangaReader),
 }
-
+#[derive(Clone, Default)]
 struct MangaReader {
     chapters: Vec<SChapter>,
     chapter: usize,

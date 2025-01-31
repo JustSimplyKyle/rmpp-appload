@@ -21,7 +21,6 @@ Rectangle {
                     stat.text = `${contents}`
                     break;
                 case 2:
-                    list.text = `${contents}`
                     break;
                 case 4:
                     currPage.text = `${contents}`
@@ -69,6 +68,42 @@ Rectangle {
                 }
             }
         }
+        ColumnLayout {
+            id: chapterList
+            visible: false
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Rectangle {
+                Layout.fillWidth: true
+                height: 60
+                border.width: 2
+                border.color: "black"
+                Text {
+                    font.pointSize: 24
+                    text: "baby2"
+                }
+            }
+            Rectangle {
+                Layout.fillWidth: true
+                height: 60
+                border.width: 2
+                border.color: "black"
+                Text {
+                    font.pointSize: 24
+                    text: "baby3"
+                }
+            }
+            Rectangle {
+                Layout.fillWidth: true
+                height: 60
+                border.width: 2
+                border.color: "black"
+                Text {
+                    font.pointSize: 24
+                    text: "baby4"
+                }
+            }
+        }
         Rectangle {
             anchors.top: view.top
             anchors.right: view.right
@@ -104,6 +139,10 @@ Rectangle {
                     anchors.right: parent.right
                     Button {
                         font.pointSize: 24
+                        onClicked: () => {
+                            backendImage.visible = false;
+                            chapterList.visible = true;
+                        }
                         text: "Change chapter"
                     }
                     Button {
