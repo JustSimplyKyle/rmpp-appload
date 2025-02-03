@@ -5,15 +5,17 @@ import net.asivery.AppLoad 1.0
 
 Rectangle {
     anchors.fill: parent
+    id: base
     property string manga_id: ""
     property var chapters: []
-    property var pages: []
     property string activePage: "mangaReading"
+    property var pages
 
-    ListModel {
-        id: pageModel
-    }    // This is an endpoint. There can be multiple endpoints throughout one application
+    Component.onCompleted: {
+        pages = new Map();
+    }
 
+    // This is an endpoint. There can be multiple endpoints throughout one application
     // All endpoints will get all messages sent from the backend
     AppLoad {
         id: appload
@@ -41,6 +43,14 @@ Rectangle {
                     break;
                 case 6:
                     currChpt.text = `${contents}`
+
+                    if(!pages.get(currChpt.text)) {
+                        const obj = Qt.createQmlObject(`
+                            import QtQuick
+                            ListModel {}
+                        `, base, "myDynamicSnippet");
+                        pages.set(currChpt.text, obj);
+                    }
                     chptSeparater.text = "/"
                     chptStarter.text = "chapter:"
                     break;
@@ -54,7 +64,10 @@ Rectangle {
                     chapterList.model = chapters.length
                     break;
                 case 9:
-                    pageModel.clear()
+                    let pageModel = pages.get(currChpt.text);
+                    if(pageModel !== undefined) {
+                        pageModel.clear()
+                    }
                     contents.split('\n').forEach(pageUrl => {
                         pageModel.append({ "pageUrl": pageUrl })
                     })
@@ -105,6 +118,95 @@ Rectangle {
             }
         }
     }
+    Rectangle {
+        z: 1
+        anchors.top: view.top
+        anchors.right: view.right
+        border.width: 2
+        border.color: "black"
+        width: 150
+        height: 100
+        Text {
+            id: box
+            text: "Settings"
+            font.pointSize: 24
+            anchors.centerIn: parent
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: () => settings.visible = !settings.visible
+        }
+
+        Rectangle {
+            id: settings
+            visible: false
+            anchors.top: parent.bottom
+            anchors.right: parent.right
+            width: content.implicitWidth
+            height: content.implicitHeight
+            ColumnLayout {
+                id: content
+                spacing: -1
+                anchors.centerIn: parent
+                anchors.right: parent.right
+                Rectangle {
+                    width: 300
+                    height: 45
+                    border.width: 2
+                    border.color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            activePage = "chapterList"
+                            appload.sendMessage(6, "")
+                        }
+                    }
+                    Text {
+                        font.pointSize: 24
+                        text: "Chapter Selection"
+                    }
+                }
+                Rectangle {
+                    width: 300
+                    height: 45
+                    border.width: 2
+                    border.color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            activePage = "pageList"
+                            // appload.sendMessage(8, "")
+                        }
+                    }
+                    Text {
+                        font.pointSize: 24
+                        text: "Page Overview"
+                    }
+                }
+                Rectangle {
+                    width: 300
+                    height: 45
+                    border.width: 2
+                    border.color: "black"
+                    Text {
+                        font.pointSize: 24
+                        text: "Change chapter"
+                    }
+                }
+                Rectangle {
+                    width: 300
+                    height: 45
+                    border.width: 2
+                    border.color: "black"
+                    Text {
+                        font.pointSize: 24
+                        text: "Change chapter"
+                    }
+                }
+            }
+        }
+    }
     
 
     ColumnLayout {
@@ -114,7 +216,7 @@ Rectangle {
         Image {
             id: backendImage
             visible: activePage === "mangaReading"
-            Layout.preferredHeight: backendImage.visible ? undefined : 0
+            Layout.preferredHeight: backendImage.visible ? null : 0
             Layout.fillWidth: backendImage.visible ? true : false
             Layout.fillHeight: backendImage.visible ? true : false
             fillMode: Image.PreserveAspectFit
@@ -137,7 +239,7 @@ Rectangle {
             visible: activePage === "chapterList"
             Layout.fillWidth: chapterList.visible ? true : false
             Layout.fillHeight: chapterList.visible ? true: false
-            Layout.preferredHeight: chapterList.visible ? undefined : 0
+            Layout.preferredHeight: chapterList.visible ? null : 0
             cellWidth: view.width
             cellHeight: 100
             model: 0
@@ -193,16 +295,16 @@ Rectangle {
             flickableDirection: Flickable.NoFlick
             Layout.fillWidth: pageList.visible ? true : false
             Layout.fillHeight: pageList.visible ? true: false
-            Layout.preferredHeight: pageList.visible ? undefined : 0
+            Layout.preferredHeight: pageList.visible ? null : 0
             cellWidth: view.width / 4.
             cellHeight: 580
             clip: true
 
             snapMode: GridView.SnapOneRow
             flickDeceleration: 100000
-            highlightMoveDuration: 1000000 
+            highlightMoveDuration: 1000000
 
-            model: pageModel
+            model: pages.get(currChpt.text)
 
             header: Rectangle {
                 width: view.width
@@ -252,94 +354,6 @@ Rectangle {
                             anchors.centerIn: parent
                             font.pointSize: 24
                             text: index + 1
-                        }
-                    }
-                }
-            }
-        }
-        Rectangle {
-            anchors.top: view.top
-            anchors.right: view.right
-            border.width: 2
-            border.color: "black"
-            width: 150
-            height: 100
-            Text {
-                id: box
-                text: "Settings"
-                font.pointSize: 24
-                anchors.centerIn: parent
-            }
-
-            MouseArea {
-                anchors.fill: parent
-                onClicked: () => settings.visible = !settings.visible
-            }
-
-            Rectangle {
-                id: settings
-                visible: false
-                anchors.top: parent.bottom
-                anchors.right: parent.right
-                width: content.implicitWidth
-                height: content.implicitHeight
-                ColumnLayout {
-                    id: content
-                    spacing: -1
-                    anchors.centerIn: parent
-                    anchors.right: parent.right
-                    Rectangle {
-                        width: 300
-                        height: 45
-                        border.width: 2
-                        border.color: "black"
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: () => {
-                                activePage = "chapterList"
-                                appload.sendMessage(6, "")
-                            }
-                        }
-                        Text {
-                            font.pointSize: 24
-                            text: "Chapter Selection"
-                        }
-                    }
-                    Rectangle {
-                        width: 300
-                        height: 45
-                        border.width: 2
-                        border.color: "black"
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: () => {
-                                activePage = "pageList"
-                                appload.sendMessage(8, "")
-                            }
-                        }
-                        Text {
-                            font.pointSize: 24
-                            text: "Page Overview"
-                        }
-                    }
-                    Rectangle {
-                        width: 300
-                        height: 45
-                        border.width: 2
-                        border.color: "black"
-                        Text {
-                            font.pointSize: 24
-                            text: "Change chapter"
-                        }
-                    }
-                    Rectangle {
-                        width: 300
-                        height: 45
-                        border.width: 2
-                        border.color: "black"
-                        Text {
-                            font.pointSize: 24
-                            text: "Change chapter"
                         }
                     }
                 }
