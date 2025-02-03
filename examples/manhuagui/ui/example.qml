@@ -6,7 +6,14 @@ import net.asivery.AppLoad 1.0
 Rectangle {
     anchors.fill: parent
     property string manga_id: ""
-    // This is an endpoint. There can be multiple endpoints throughout one application
+    property var chapters: []
+    property var pages: []
+    property string activePage: "mangaReading"
+
+    ListModel {
+        id: pageModel
+    }    // This is an endpoint. There can be multiple endpoints throughout one application
+
     // All endpoints will get all messages sent from the backend
     AppLoad {
         id: appload
@@ -42,17 +49,74 @@ Rectangle {
                     chptSeparater.text = "/"
                     chptStarter.text = "chapter:"
                     break;
+                case 8:
+                    chapters = contents.split('\n')
+                    chapterList.model = chapters.length
+                    break;
+                case 9:
+                    pageModel.clear()
+                    contents.split('\n').forEach(pageUrl => {
+                        pageModel.append({ "pageUrl": pageUrl })
+                    })
+                    pageList.model = pageModel
+                    pageList.forceLayout();
+                    break;
             }
         }
     }
+
+    Popup {
+        id: popup
+        x: 0
+        y: view.height - popup.height - 80
+        closePolicy: Popup.CloseOnPressOutside
+        width: parent.width
+        height: 120
+        Rectangle {
+            anchors.fill: parent
+            height: parent.height
+
+            ColumnLayout {
+                anchors.fill: parent
+                Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
+                Text {
+                    font.pointSize: 36
+                    text: slider.value
+                }
+                Slider {
+                    id: slider
+                    Layout.preferredWidth: parent.width * 0.75
+                    snapMode: Slider.SnapAlways
+                    // live: false
+                    Component.onCompleted: {
+                        slider.handle.implicitWidth = 36;
+                        slider.handle.implicitHeight = 36;
+                        slider.handle.radius = 26;
+                        slider.handle.color = slider.pressed ? "#f0f0f0" : "#f6f6f6";
+                    }
+                    onMoved: () => {
+                        appload.sendMessage(9, slider.value - 1);
+                    }
+                    stepSize: 1
+                    from: 1
+                    value: 1
+                    to: parseInt(totalPage.text)
+                }
+            }
+        }
+    }
+    
+
     ColumnLayout {
         id: view
         anchors.fill: parent
 
         Image {
             id: backendImage
-            Layout.fillWidth: true
-            Layout.fillHeight: true
+            visible: activePage === "mangaReading"
+            Layout.preferredHeight: backendImage.visible ? undefined : 0
+            Layout.fillWidth: backendImage.visible ? true : false
+            Layout.fillHeight: backendImage.visible ? true : false
             fillMode: Image.PreserveAspectFit
             RowLayout {
                 anchors.fill: parent
@@ -68,39 +132,128 @@ Rectangle {
                 }
             }
         }
-        ColumnLayout {
+        GridView {
             id: chapterList
-            visible: false
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Rectangle {
-                Layout.fillWidth: true
-                height: 60
-                border.width: 2
-                border.color: "black"
+            visible: activePage === "chapterList"
+            Layout.fillWidth: chapterList.visible ? true : false
+            Layout.fillHeight: chapterList.visible ? true: false
+            Layout.preferredHeight: chapterList.visible ? undefined : 0
+            cellWidth: view.width
+            cellHeight: 100
+            model: 0
+            header: Rectangle {
+                width: view.width
+                height: 80
                 Text {
+                    anchors.centerIn: parent
                     font.pointSize: 24
-                    text: "baby2"
+                    text: "Chapter Selection"
                 }
             }
-            Rectangle {
-                Layout.fillWidth: true
-                height: 60
-                border.width: 2
-                border.color: "black"
-                Text {
-                    font.pointSize: 24
-                    text: "baby3"
+            delegate: RowLayout {
+                spacing: -1
+                Rectangle {
+                    width: 100
+                    height: chapterList.cellHeight + 1
+                    border.width: 2
+                    border.color: "black"
+                    Text {
+                        anchors.centerIn: parent
+                        font.pointSize: 36
+                        text: index + 1
+                    }
+                }
+                Rectangle {
+                    width: view.width - 100
+                    height: chapterList.cellHeight + 1
+                    border.width: 2
+                    border.color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            backendImage.source = "";
+                            appload.sendMessage(7, index);
+                            activePage = "mangaReading"
+                        }
+                    }
+                    Text {
+                        font.pointSize: 36
+                        text: chapters[index]
+                    }
                 }
             }
-            Rectangle {
-                Layout.fillWidth: true
-                height: 60
+        }
+        Rectangle {
+            visible: pageList.visible
+            Layout.fillWidth: pageList.visible ? true : false
+        }
+        GridView {
+            id: pageList
+            visible: activePage === "pageList"
+            flickableDirection: Flickable.NoFlick
+            Layout.fillWidth: pageList.visible ? true : false
+            Layout.fillHeight: pageList.visible ? true: false
+            Layout.preferredHeight: pageList.visible ? undefined : 0
+            cellWidth: view.width / 4.
+            cellHeight: 580
+            clip: true
+
+            snapMode: GridView.SnapOneRow
+            flickDeceleration: 100000
+            highlightMoveDuration: 1000000 
+
+            model: pageModel
+
+            header: Rectangle {
+                width: view.width
+                height: 80
+                Text {
+                    anchors.centerIn: parent
+                    font.pointSize: 24
+                    text: "Page Overview"
+                }
+            }
+
+            delegate: Rectangle {
+                width: pageList.cellWidth + 1
+                height: pageList.cellHeight + 1
                 border.width: 2
                 border.color: "black"
-                Text {
-                    font.pointSize: 24
-                    text: "baby4"
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: () => {
+                        backendImage.source = "";
+                        appload.sendMessage(9, index);
+                        activePage = "mangaReading"
+                    }
+                }
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: -1
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Image {
+                            anchors.fill: parent
+                            fillMode: Image.PreserveAspectFit
+                            source: pageUrl
+                            asynchronous: true
+                        }
+
+                        border.width: 2
+                        border.color: "black"
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        border.width: 2
+                        border.color: "black"
+                        height: 100
+                        Text {
+                            anchors.centerIn: parent
+                            font.pointSize: 24
+                            text: index + 1
+                        }
+                    }
                 }
             }
         }
@@ -128,43 +281,75 @@ Rectangle {
                 visible: false
                 anchors.top: parent.bottom
                 anchors.right: parent.right
-                width: content.implicitWidth + 30
-                height: content.implicitHeight + 10
-                border.width: 2
-                border.color: "black"
+                width: content.implicitWidth
+                height: content.implicitHeight
                 ColumnLayout {
                     id: content
-                    spacing: 10
+                    spacing: -1
                     anchors.centerIn: parent
                     anchors.right: parent.right
-                    Button {
-                        font.pointSize: 24
-                        onClicked: () => {
-                            backendImage.visible = false;
-                            chapterList.visible = true;
+                    Rectangle {
+                        width: 300
+                        height: 45
+                        border.width: 2
+                        border.color: "black"
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: () => {
+                                activePage = "chapterList"
+                                appload.sendMessage(6, "")
+                            }
                         }
-                        text: "Change chapter"
+                        Text {
+                            font.pointSize: 24
+                            text: "Chapter Selection"
+                        }
                     }
-                    Button {
-                        font.pointSize: 24
-                        text: "Change page"
+                    Rectangle {
+                        width: 300
+                        height: 45
+                        border.width: 2
+                        border.color: "black"
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: () => {
+                                activePage = "pageList"
+                                appload.sendMessage(8, "")
+                            }
+                        }
+                        Text {
+                            font.pointSize: 24
+                            text: "Page Overview"
+                        }
                     }
-                    Button {
-                        font.pointSize: 24
-                        text: "Go back to settings"
+                    Rectangle {
+                        width: 300
+                        height: 45
+                        border.width: 2
+                        border.color: "black"
+                        Text {
+                            font.pointSize: 24
+                            text: "Change chapter"
+                        }
                     }
-                    Button {
-                        font.pointSize: 24
-                        text: "Go back to bookshelf"
+                    Rectangle {
+                        width: 300
+                        height: 45
+                        border.width: 2
+                        border.color: "black"
+                        Text {
+                            font.pointSize: 24
+                            text: "Change chapter"
+                        }
                     }
                 }
             }
         }
 
-
         RowLayout {
             id: layout
             Layout.fillWidth: true
+
             Rectangle {
                 border.width: 2
                 border.color: "black"
@@ -178,7 +363,25 @@ Rectangle {
 
                 MouseArea {
                     anchors.fill: parent
+                    // onClicked: () => popup.open()
                     onClicked: () => appload.sendMessage(99, "")
+                }
+            }
+            Rectangle {
+                border.width: 2
+                border.color: "black"
+                width: 100
+                height: 100
+                 Text {
+                    text: "Close"
+                    font.pointSize: 24
+                    anchors.centerIn: parent
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: () => popup.open()
+                    // onClicked: () => appload.sendMessage(99, "")
                 }
             }
 
