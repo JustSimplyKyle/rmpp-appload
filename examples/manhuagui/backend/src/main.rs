@@ -16,9 +16,13 @@ use anyhow::{bail, Context};
 use appload_client::{start, AppLoadBackend, BackendReplier, Message, MSG_SYSTEM_NEW_COORDINATOR};
 use async_trait::async_trait;
 use backend::{Manhuagui, Preferences, SChapter};
-use futures_util::{stream::FuturesOrdered, StreamExt};
+use futures_util::{future::BoxFuture, stream::FuturesOrdered, StreamExt};
 use image::{codecs::png::PngEncoder, ImageReader};
-use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
+use tokio::{
+    io::AsyncWriteExt,
+    sync::{Mutex, Semaphore},
+    task::JoinHandle,
+};
 
 #[tokio::main]
 async fn main() {
@@ -29,7 +33,6 @@ async fn main() {
 
 struct MyBackend {
     api: LazyLock<Manhuagui>,
-    handles: Arc<Mutex<FuturesOrdered<JoinHandle<anyhow::Result<usize>>>>>,
     output_pages: Arc<Mutex<Vec<String>>>,
     active: MangaReader,
     state: State,
@@ -78,6 +81,7 @@ enum SendMessage {
     TotalChapterSize = 7,
     ChapterList = 8,
     PageList = 9,
+    PageModify = 10,
 }
 
 impl From<SendMessage> for u32 {
@@ -185,7 +189,6 @@ impl MyBackend {
             }
             MessageType::SelectPage(index) => {
                 self.active.page = index;
-                self.active.display(&self.api, functionality).await?;
                 self.state = State::Reading;
             }
             MessageType::Quit => {
@@ -195,14 +198,11 @@ impl MyBackend {
                 exit(0);
             }
         };
-        self.react_to_state(functionality).await?;
+        self.react_to_state(functionality)?;
         Ok(())
     }
 
-    async fn initiate_chapter_download(
-        &mut self,
-        functionality: BackendReplier,
-    ) -> anyhow::Result<()> {
+    fn initiate_chapter_download(&mut self, functionality: BackendReplier) {
         let downloading_status = self
             .active
             .chapter_downloading_status
@@ -210,55 +210,49 @@ impl MyBackend {
             .or_default()
             .clone();
         if downloading_status.load(Ordering::Relaxed) {
-            return Ok(());
+            return;
         }
 
         let manga = Arc::new(self.active.clone());
 
-        let handles = tokio_stream::iter(0..manga.pages.len())
-            .map(|page| {
-                let api = self.api.clone();
-                let manga = manga.clone();
-                tokio::spawn(async move {
-                    manga.save_to_disk(&api, page).await?;
-                    Ok(page)
-                })
-            })
-            .collect::<Vec<_>>()
-            .await;
+        functionality
+            .send_message(
+                SendMessage::PageList.into(),
+                &(manga.chapter + 1).to_string(),
+            )
+            .unwrap();
 
-        self.handles.lock().await.extend(handles.into_iter());
-        self.output_pages = Arc::new(Mutex::new(
-            (0..manga.pages.len()).map(|_| String::new()).collect(),
-        ));
-
-        let manga = self.active.clone();
-        let handles = self.handles.clone();
-        let output_pages = self.output_pages.clone();
+        let api = self.api.clone();
         let is_running = downloading_status;
         tokio::spawn(async move {
             is_running.store(true, std::sync::atomic::Ordering::Relaxed);
 
-            while let Some(x) = handles.lock().await.next().await {
+            let mut iter = tokio_stream::iter(0..manga.pages.len())
+                .map(|page| {
+                    let manga = manga.clone();
+                    let api = api.clone();
+                    tokio::spawn(async move {
+                        manga.save_to_disk(&api, page).await?;
+                        anyhow::Ok(page)
+                    })
+                })
+                .buffered(3);
+
+            while let Some(x) = iter.next().await {
                 let page = x??;
 
                 let path = manga.get_url_with_path(page)?.1;
-                let mut output_pages = output_pages.lock().await;
-                output_pages[page] = format!("file:{}", path.display());
-                functionality
-                    .send_message(SendMessage::PageList.into(), &output_pages.join("\n"))?;
+                functionality.send_message(
+                    SendMessage::PageModify.into(),
+                    &format!("{}\n{}\nfile:{}", manga.chapter + 1, page, path.display()),
+                )?;
             }
             is_running.store(false, std::sync::atomic::Ordering::Relaxed);
             anyhow::Ok(())
         });
-
-        Ok(())
     }
 
-    async fn react_to_state(
-        &mut self,
-        functionality: &BackendReplier,
-    ) -> Result<(), anyhow::Error> {
+    fn react_to_state(&mut self, functionality: &BackendReplier) -> Result<(), anyhow::Error> {
         match self.state {
             State::Idleing => {}
             State::Reading => {
@@ -280,9 +274,9 @@ impl MyBackend {
                     &manga_reader.chapters.len().to_string(),
                 )?;
 
-                manga_reader.display(&self.api, functionality).await?;
+                functionality.send_message(SendMessage::BackendImage.into(), "wtf")?;
 
-                self.initiate_chapter_download(*functionality).await?;
+                self.initiate_chapter_download(*functionality);
             }
             State::ChapterList {
                 output: ref chapters,
@@ -427,9 +421,9 @@ impl Default for MyBackend {
                 Manhuagui::new(Preferences::default()).expect("internet issues baby")
             }),
             state: Default::default(),
-            handles: Default::default(),
             active: Default::default(),
             output_pages: Default::default(),
+            // limit: Arc::new(Semaphore::new(10)),
         }
     }
 }
