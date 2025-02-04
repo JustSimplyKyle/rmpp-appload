@@ -23,8 +23,23 @@ Rectangle {
         onMessageReceived: (type, contents) => {
             switch(type){
                 case 101:
-                    backendImage.source = `${contents}`
-                    // backendImage
+                    // const s = pages.get(currChpt.text).get(parseInt(currPage.text)-1).pageUrl;
+                    const chapter = pages.get(currChpt.text);
+                    if(!chapter) {
+                        backendImage.source = "https://w7.pngwing.com/pngs/773/130/png-transparent-data-download-downloader-downloading-transfer-free-system-and-user-interface-icon-thumbnail.png"
+                        break;
+                    }
+                    const pagef = chapter.get(parseInt(currPage.text) - 1);
+                    if(!pagef) {
+                        backendImage.source = "https://w7.pngwing.com/pngs/773/130/png-transparent-data-download-downloader-downloading-transfer-free-system-and-user-interface-icon-thumbnail.png"
+                        break;
+                    }
+                    const url = pagef.pageUrl;
+                    if(!url) {
+                        backendImage.source = "https://w7.pngwing.com/pngs/773/130/png-transparent-data-download-downloader-downloading-transfer-free-system-and-user-interface-icon-thumbnail.png"
+                        break;
+                    }
+                    backendImage.source = url;
                     break;
                 case 11:
                     stat.text = `${contents}`
@@ -64,16 +79,39 @@ Rectangle {
                     chapterList.model = chapters.length
                     break;
                 case 9:
-                    let pageModel = pages.get(currChpt.text);
-                    if(pageModel !== undefined) {
-                        pageModel.clear()
+                    const targetChpt = contents;
+                    console.log("finish intialization!");
+                    let pageModel = pages.get(targetChpt);
+                    console.log(pageModel);
+                    for(let i = 0; i < parseInt(totalPage.text); i++) {
+                        console.log("me try", i);
+                        const page = pageModel.get(i);
+                        if(!page) {
+                            console.log("newnewnew");
+                            pageModel.append({ "pageUrl": "https://w7.pngwing.com/pngs/773/130/png-transparent-data-download-downloader-downloading-transfer-free-system-and-user-interface-icon-thumbnail.png" });
+                        }
                     }
-                    contents.split('\n').forEach(pageUrl => {
-                        pageModel.append({ "pageUrl": pageUrl })
-                    })
-                    pageList.model = pageModel
-                    pageList.forceLayout();
+                    if (parseInt(targetChpt) === parseInt(currChpt.text)) {
+                        pageList.model = pageModel;
+                        pageList.forceLayout();
+                    }
                     break;
+                case 10:
+                    const arr = contents.split('\n');
+                    const targetChapter = arr[0];
+                    const targetPage = arr[1];
+                    const path = arr[2];
+                    console.log(targetChapter,targetPage,path);
+                    const ageModel = pages.get(targetChapter);
+                    ageModel.get(targetPage).pageUrl = path;
+                    if(parseInt(targetChapter) === parseInt(currChpt.text)) {
+                        if(parseInt(targetPage) + 1 === parseInt(currPage.text)) {
+                            backendImage.source = path;
+                        }
+                        pageList.model = ageModel;
+                        pageList.forceLayout();
+                        // pageList.model.get(targetPage).pageUrl = path;
+                    }
             }
         }
     }
@@ -219,13 +257,15 @@ Rectangle {
             Layout.preferredHeight: backendImage.visible ? null : 0
             Layout.fillWidth: backendImage.visible ? true : false
             Layout.fillHeight: backendImage.visible ? true : false
+            source: ""
+            // source: pages.get(currChpt.text).get(parseInt(currPage.text) - 1).pageUrl 
             fillMode: Image.PreserveAspectFit
             RowLayout {
                 anchors.fill: parent
                 MouseArea {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    onClicked: () => appload.sendMessage(3, "")
+                    onClicked: () =>  appload.sendMessage(3, "") 
                 }
                 MouseArea {
                     Layout.fillWidth: true
