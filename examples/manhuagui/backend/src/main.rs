@@ -5,24 +5,16 @@ use std::{
     io::Cursor,
     path::{Path, PathBuf},
     process::exit,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, LazyLock,
-    },
-    time::Duration,
+    sync::{Arc, LazyLock},
 };
 
 use anyhow::{bail, Context};
 use appload_client::{start, AppLoadBackend, BackendReplier, Message, MSG_SYSTEM_NEW_COORDINATOR};
 use async_trait::async_trait;
 use backend::{Manhuagui, Preferences, SChapter};
-use futures_util::{future::BoxFuture, stream::FuturesOrdered, StreamExt};
+use futures_util::StreamExt;
 use image::{codecs::png::PngEncoder, ImageReader};
-use tokio::{
-    io::AsyncWriteExt,
-    sync::{Mutex, Semaphore},
-    task::JoinHandle,
-};
+use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
 
 #[tokio::main]
 async fn main() {
@@ -33,13 +25,13 @@ async fn main() {
 
 struct MyBackend {
     api: LazyLock<Manhuagui>,
-    output_pages: Arc<Mutex<Vec<String>>>,
+    handlers: Arc<Mutex<HashMap<usize, Option<JoinHandle<anyhow::Result<()>>>>>>,
     active: MangaReader,
     state: State,
 }
 
 #[derive(Debug)]
-enum MessageType {
+enum RecvMessage {
     Connect,
     SearchManga(String),
     NextPage,
@@ -52,7 +44,7 @@ enum MessageType {
     Quit,
 }
 
-impl TryFrom<Message> for MessageType {
+impl TryFrom<Message> for RecvMessage {
     type Error = anyhow::Error;
     fn try_from(message: Message) -> Result<Self, Self::Error> {
         let msg = match message.msg_type {
@@ -73,20 +65,55 @@ impl TryFrom<Message> for MessageType {
 }
 
 enum SendMessage {
-    Status = 11,
-    BackendImage = 101,
-    ActivePageNumber = 4,
-    TotalPageSize = 5,
-    ActiveChapterNumber = 6,
-    TotalChapterSize = 7,
-    ChapterList = 8,
-    PageList = 9,
-    PageModify = 10,
+    ActivePageNumber(usize),
+    TotalPageSize(usize),
+    ActiveChapterNumber(usize),
+    TotalChapterSize(usize),
+    ChapterList(String),
+    PageListChapter(usize),
+    PageModify {
+        chapter: usize,
+        page: usize,
+        path: PathBuf,
+    },
+    Status(String),
+    BackendImage,
 }
 
-impl From<SendMessage> for u32 {
-    fn from(val: SendMessage) -> Self {
-        val as Self
+impl SendMessage {
+    fn display(self) -> (u32, Option<String>) {
+        match self {
+            Self::ActivePageNumber(x) => (4, Some(x.to_string())),
+            Self::TotalPageSize(x) => (5, Some(x.to_string())),
+            Self::ActiveChapterNumber(x) => (6, Some(x.to_string())),
+            Self::TotalChapterSize(x) => (7, Some(x.to_string())),
+            Self::ChapterList(s) => (8, Some(s)),
+            Self::PageListChapter(x) => (9, Some(x.to_string())),
+            Self::PageModify {
+                chapter: display_chapter,
+                page,
+                path,
+            } => {
+                let msg = format!("{}\n{}\nfile:{}", display_chapter, page, path.display());
+                (10, Some(msg))
+            }
+            Self::Status(s) => (11, Some(s)),
+            Self::BackendImage => (101, None),
+        }
+    }
+    fn status(s: impl Into<String>) -> Self {
+        Self::Status(s.into())
+    }
+}
+
+trait ReplierExt {
+    fn send_typed_message(&self, msg: SendMessage) -> anyhow::Result<()>;
+}
+
+impl ReplierExt for BackendReplier {
+    fn send_typed_message(&self, msg: SendMessage) -> anyhow::Result<()> {
+        let (msg, contents) = msg.display();
+        self.send_message(msg, contents.as_ref().map_or("placeholder", |v| v))
     }
 }
 
@@ -97,16 +124,15 @@ impl MyBackend {
         functionality: &BackendReplier,
         message: Message,
     ) -> anyhow::Result<()> {
-        match MessageType::try_from(message)? {
-            MessageType::Connect => {
-                functionality.send_message(SendMessage::Status.into(), "connected frontend")?;
+        match RecvMessage::try_from(message)? {
+            RecvMessage::Connect => {
+                functionality.send_typed_message(SendMessage::status("connected frontend"))?;
 
                 println!("A frontend has connected");
             }
-            MessageType::SearchManga(search_term) => {
+            RecvMessage::SearchManga(search_term) => {
                 let api = &*self.api;
-
-                functionality.send_message(SendMessage::Status.into(), "starts downloading!")?;
+                functionality.send_typed_message(SendMessage::status("starts downloading"))?;
 
                 let body = api
                     .fetch_search_manga(0, &search_term, vec![])
@@ -116,7 +142,7 @@ impl MyBackend {
                     .next()
                     .context("empty")?;
 
-                functionality.send_message(SendMessage::Status.into(), "body finished!")?;
+                functionality.send_typed_message(SendMessage::status("body finished!"))?;
 
                 let chapters = api
                     .chapter_list_parse(&body)
@@ -127,7 +153,7 @@ impl MyBackend {
 
                 let first_chapter = chapters.first().context("empty")?;
 
-                functionality.send_message(SendMessage::Status.into(), "chapter finished!")?;
+                functionality.send_typed_message(SendMessage::status("chapter finished!"))?;
 
                 let result = api
                     .page_list_parse(first_chapter)
@@ -136,28 +162,24 @@ impl MyBackend {
                     .map(|x| x.image_url)
                     .collect::<Vec<_>>();
 
-                functionality.send_message(SendMessage::Status.into(), "page list downloaded")?;
+                functionality.send_typed_message(SendMessage::status("page list downloaded"))?;
 
                 self.active = MangaReader {
                     pages: result,
                     page: 0,
                     chapters,
                     chapter: 0,
-                    chapter_downloading_status: HashMap::from_iter(vec![(
-                        0,
-                        Arc::new(false.into()),
-                    )]),
                 };
                 self.state = State::Reading;
             }
-            MessageType::NextPage => {
+            RecvMessage::NextPage => {
                 let manga = &mut self.active;
                 manga.page += 1;
                 if manga.pages.len() == manga.page {
                     manga.next_chapter(&self.api).await?;
                 }
             }
-            MessageType::PrevPage => {
+            RecvMessage::PrevPage => {
                 let manga = &mut self.active;
                 if manga.page == 0 {
                     manga.prev_chapter(&self.api).await?;
@@ -165,13 +187,13 @@ impl MyBackend {
                     manga.page -= 1;
                 }
             }
-            MessageType::PrevChapter => {
+            RecvMessage::PrevChapter => {
                 self.active.prev_chapter(&self.api).await?;
             }
-            MessageType::NextChapter => {
+            RecvMessage::NextChapter => {
                 self.active.next_chapter(&self.api).await?;
             }
-            MessageType::GetChapterList => {
+            RecvMessage::GetChapterList => {
                 let output = self
                     .active
                     .chapters
@@ -182,50 +204,58 @@ impl MyBackend {
 
                 self.state = State::ChapterList { output };
             }
-            MessageType::SelectChapter(index) => {
+            RecvMessage::SelectChapter(index) => {
                 self.active.chapter = index;
                 self.active.update_chapter(&self.api).await?;
                 self.state = State::Reading;
             }
-            MessageType::SelectPage(index) => {
+            RecvMessage::SelectPage(index) => {
                 self.active.page = index;
                 self.state = State::Reading;
             }
-            MessageType::Quit => {
+            RecvMessage::Quit => {
                 if PathBuf::from("/tmp/mangarr").exists() {
                     remove_dir_all("/tmp/mangarr")?;
                 }
                 exit(0);
             }
         };
-        self.react_to_state(functionality)?;
+        self.react_to_state(functionality).await?;
         Ok(())
     }
 
-    fn initiate_chapter_download(&mut self, functionality: BackendReplier) {
-        let downloading_status = self
-            .active
-            .chapter_downloading_status
-            .entry(self.active.chapter)
-            .or_default()
-            .clone();
-        if downloading_status.load(Ordering::Relaxed) {
-            return;
-        }
+    async fn initiate_chapter_download(&self, functionality: BackendReplier) -> anyhow::Result<()> {
+        let mut handlers = self.handlers.lock().await;
+        let downloading_status = handlers.entry(self.active.chapter).or_insert(None);
+        let priority_page = if downloading_status
+            .as_ref()
+            .is_some_and(|x| !x.is_finished())
+        {
+            Some(self.active.page)
+        } else {
+            None
+        };
+        drop(handlers);
 
         let manga = Arc::new(self.active.clone());
 
-        functionality
-            .send_message(
-                SendMessage::PageList.into(),
-                &(manga.chapter + 1).to_string(),
-            )
-            .unwrap();
+        functionality.send_typed_message(SendMessage::PageListChapter(manga.chapter + 1))?;
 
         let api = self.api.clone();
-        let is_running = downloading_status;
-        tokio::spawn(async move {
-            is_running.store(true, std::sync::atomic::Ordering::Relaxed);
+        let chapter = manga.chapter;
+        let handle = tokio::spawn(async move {
+            if let Some(page) = priority_page {
+                let manga = manga.clone();
+                let api = api.clone();
+                manga.save_to_disk(&api, page).await?;
+                let path = manga.get_url_with_path(page)?.1;
+                functionality.send_typed_message(SendMessage::PageModify {
+                    chapter: manga.chapter + 1,
+                    page,
+                    path,
+                })?;
+                return Ok(());
+            }
 
             let mut iter = tokio_stream::iter(0..manga.pages.len())
                 .map(|page| {
@@ -242,48 +272,62 @@ impl MyBackend {
                 let page = x??;
 
                 let path = manga.get_url_with_path(page)?.1;
-                functionality.send_message(
-                    SendMessage::PageModify.into(),
-                    &format!("{}\n{}\nfile:{}", manga.chapter + 1, page, path.display()),
-                )?;
+                functionality.send_typed_message(SendMessage::PageModify {
+                    chapter: manga.chapter + 1,
+                    page,
+                    path,
+                })?;
             }
-            is_running.store(false, std::sync::atomic::Ordering::Relaxed);
             anyhow::Ok(())
         });
+        if priority_page.is_none() {
+            self.handlers.lock().await.insert(chapter, Some(handle));
+        }
+        Ok(())
     }
 
-    fn react_to_state(&mut self, functionality: &BackendReplier) -> Result<(), anyhow::Error> {
+    async fn react_to_state(&self, functionality: &BackendReplier) -> Result<(), anyhow::Error> {
         match self.state {
             State::Idleing => {}
             State::Reading => {
                 let manga_reader = &self.active;
-                functionality.send_message(
-                    SendMessage::ActivePageNumber.into(),
-                    &(manga_reader.page + 1).to_string(),
-                )?;
-                functionality.send_message(
-                    SendMessage::TotalPageSize.into(),
-                    &manga_reader.pages.len().to_string(),
-                )?;
-                functionality.send_message(
-                    SendMessage::ActiveChapterNumber.into(),
-                    &(manga_reader.chapter + 1).to_string(),
-                )?;
-                functionality.send_message(
-                    SendMessage::TotalChapterSize.into(),
-                    &manga_reader.chapters.len().to_string(),
-                )?;
 
-                functionality.send_message(SendMessage::BackendImage.into(), "wtf")?;
+                functionality
+                    .send_typed_message(SendMessage::ActivePageNumber(manga_reader.page + 1))?;
 
-                self.initiate_chapter_download(*functionality);
+                functionality
+                    .send_typed_message(SendMessage::TotalPageSize(manga_reader.pages.len()))?;
+                functionality.send_typed_message(SendMessage::ActiveChapterNumber(
+                    manga_reader.chapter + 1,
+                ))?;
+                functionality.send_typed_message(SendMessage::TotalChapterSize(
+                    manga_reader.chapters.len(),
+                ))?;
+
+                for (_, v) in self
+                    .handlers
+                    .lock()
+                    .await
+                    .iter_mut()
+                    .filter(|(&k, _)| k != self.active.chapter)
+                {
+                    v.as_ref().unwrap().abort();
+                    *v = None;
+                }
+
+                self.handlers.lock().await.retain(|_, y| y.is_some());
+
+                functionality.send_typed_message(SendMessage::BackendImage)?;
+
+                self.initiate_chapter_download(*functionality).await?;
             }
             State::ChapterList {
                 output: ref chapters,
                 ..
             } => {
-                functionality.send_message(SendMessage::ChapterList.into(), chapters)?;
+                functionality.send_typed_message(SendMessage::ChapterList(chapters.to_string()))?;
             }
+            State::Search => todo!(),
         };
         Ok(())
     }
@@ -293,6 +337,7 @@ enum State {
     Idleing,
     ChapterList { output: String },
     Reading,
+    Search,
 }
 #[derive(Clone, Default)]
 struct MangaReader {
@@ -300,7 +345,6 @@ struct MangaReader {
     chapter: usize,
     pages: Vec<String>,
     page: usize,
-    chapter_downloading_status: HashMap<usize, Arc<AtomicBool>>,
 }
 
 impl MangaReader {
@@ -322,29 +366,6 @@ impl MangaReader {
             .collect::<Vec<_>>();
         self.pages = pages;
         self.page = 0;
-        Ok(())
-    }
-    pub async fn display(
-        &self,
-        api: &Manhuagui,
-        functionality: &BackendReplier,
-    ) -> anyhow::Result<()> {
-        if !PathBuf::from("/tmp/mangarr").exists() {
-            create_dir("/tmp/mangarr/")?;
-        }
-
-        let (url, ps) = self.get_url_with_path(self.page)?;
-
-        if !ps.exists() {
-            functionality.send_message(SendMessage::Status.into(), "downloading image")?;
-            Self::save_page(url, api, &ps).await?;
-            functionality.send_message(SendMessage::Status.into(), "finish downloading")?;
-        }
-
-        functionality.send_message(
-            SendMessage::BackendImage.into(),
-            &format!("file:{}", ps.display()),
-        )?;
         Ok(())
     }
     pub async fn save_to_disk(&self, api: &Manhuagui, page: usize) -> anyhow::Result<()> {
@@ -422,7 +443,7 @@ impl Default for MyBackend {
             }),
             state: Default::default(),
             active: Default::default(),
-            output_pages: Default::default(),
+            handlers: Default::default(),
             // limit: Arc::new(Semaphore::new(10)),
         }
     }

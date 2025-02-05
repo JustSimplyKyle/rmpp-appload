@@ -1,5 +1,6 @@
 <RCC>
     <qresource>
         <file>ui/example.qml</file>
+        <file>ui/SwipeDetection.qml</file>
     </qresource>
 </RCC>
