@@ -3,6 +3,7 @@ import QtQuick.Controls 2.5
 import QtQuick.Layouts 1.3
 import net.asivery.AppLoad 1.0
 
+
 Rectangle {
     anchors.fill: parent
     id: base
@@ -80,14 +81,10 @@ Rectangle {
                     break;
                 case 9:
                     const targetChpt = contents;
-                    console.log("finish intialization!");
                     let pageModel = pages.get(targetChpt);
-                    console.log(pageModel);
                     for(let i = 0; i < parseInt(totalPage.text); i++) {
-                        console.log("me try", i);
                         const page = pageModel.get(i);
                         if(!page) {
-                            console.log("newnewnew");
                             pageModel.append({ "pageUrl": "https://w7.pngwing.com/pngs/773/130/png-transparent-data-download-downloader-downloading-transfer-free-system-and-user-interface-icon-thumbnail.png" });
                         }
                     }
@@ -101,7 +98,6 @@ Rectangle {
                     const targetChapter = arr[0];
                     const targetPage = arr[1];
                     const path = arr[2];
-                    console.log(targetChapter,targetPage,path);
                     const ageModel = pages.get(targetChapter);
                     ageModel.get(targetPage).pageUrl = path;
                     if(parseInt(targetChapter) === parseInt(currChpt.text)) {
@@ -119,7 +115,8 @@ Rectangle {
     Popup {
         id: popup
         x: 0
-        y: view.height - popup.height - 80
+        // y: view.height - popup.height - 80
+        y: view.height - popup.height
         closePolicy: Popup.CloseOnPressOutside
         width: parent.width
         height: 120
@@ -136,7 +133,7 @@ Rectangle {
                 }
                 Slider {
                     id: slider
-                    Layout.preferredWidth: parent.width * 0.75
+                    Layout.preferredWidth: parent.width
                     snapMode: Slider.SnapAlways
                     // live: false
                     Component.onCompleted: {
@@ -156,6 +153,27 @@ Rectangle {
             }
         }
     }
+
+    Rectangle {
+        anchors {
+            left: parent.left
+            right: parent.right
+            bottom: parent.bottom
+        }
+        height: 80
+        SwipeDetection {
+            id: swipew
+            anchors.fill: parent
+            onReleased: () => {
+                if(swipew.swipeUp) {
+                    popup.open();
+                } else if (swipew.swipeDown) {
+                    popup.close();
+                }
+            }
+        }
+    }
+
     Rectangle {
         z: 1
         anchors.top: view.top
@@ -245,10 +263,36 @@ Rectangle {
             }
         }
     }
+
+    RowLayout {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: parent.height - layout.implicitHeight
+        z: 5
+        Rectangle {
+            Layout.alignment: Qt.AlignHCenter | Qt.AlignTop
+            Layout.preferredWidth: 60
+            Layout.preferredHeight: 60
+            id: upstuff
+            visible: false
+            color: "black"
+        }
+        Rectangle {
+            id: downstuff
+            visible: false
+            Layout.alignment: Qt.AlignHCenter | Qt.AlignBottom
+            width: 60
+            height: 60
+            color: "black"
+        }
+
+    }
     
 
     ColumnLayout {
         id: view
+        clip: true
         anchors.fill: parent
 
         Image {
@@ -257,8 +301,6 @@ Rectangle {
             Layout.preferredHeight: backendImage.visible ? null : 0
             Layout.fillWidth: backendImage.visible ? true : false
             Layout.fillHeight: backendImage.visible ? true : false
-            source: ""
-            // source: pages.get(currChpt.text).get(parseInt(currPage.text) - 1).pageUrl 
             fillMode: Image.PreserveAspectFit
             RowLayout {
                 anchors.fill: parent
@@ -325,24 +367,18 @@ Rectangle {
                 }
             }
         }
-        Rectangle {
-            visible: pageList.visible
-            Layout.fillWidth: pageList.visible ? true : false
-        }
         GridView {
             id: pageList
             visible: activePage === "pageList"
-            flickableDirection: Flickable.NoFlick
             Layout.fillWidth: pageList.visible ? true : false
             Layout.fillHeight: pageList.visible ? true: false
             Layout.preferredHeight: pageList.visible ? null : 0
             cellWidth: view.width / 4.
-            cellHeight: 580
+            cellHeight: 660
             clip: true
 
-            snapMode: GridView.SnapOneRow
-            flickDeceleration: 100000
-            highlightMoveDuration: 1000000
+            interactive: false
+            highlightMoveDuration: 0
 
             model: pages.get(currChpt.text)
 
@@ -353,6 +389,47 @@ Rectangle {
                     anchors.centerIn: parent
                     font.pointSize: 24
                     text: "Page Overview"
+                }
+            }
+
+            property int row: 0
+
+            function scrollDownOneRow() {
+                console.log(pageList.model.count/4, pageList.row);
+                if((Math.ceil(pageList.model.count/4) - 4) >= pageList.row)  {
+                    pageList.row+=1;
+                }
+                pageList.positionViewAtIndex(pageList.row*4, GridView.Beginning);
+            }
+            function scrollUpOneRow() {
+                if(pageList.row > 0) {
+                    pageList.row-=1;
+                }
+                pageList.positionViewAtIndex(pageList.row*4, GridView.Beginning);
+            }
+
+            SwipeDetection {
+                id: listScroll
+                anchors.fill: parent
+                onChanged: () => {
+                    if(listScroll.swipeUp) {
+                        downstuff.visible = true;
+                        upstuff.visible = false;
+                    } else if (listScroll.swipeDown) {
+                        upstuff.visible = true;
+                        downstuff.visible = false;
+                    }
+                }
+                onReleased: () => {
+                    if(listScroll.swipeUp) {
+                        console.log("upupup");
+                        pageList.scrollDownOneRow();
+                    } else if (listScroll.swipeDown) {
+                        console.log("downdowndown");
+                        pageList.scrollUpOneRow();
+                    }
+                    downstuff.visible = false;
+                    upstuff.visible = false;
                 }
             }
 
@@ -421,29 +498,12 @@ Rectangle {
                     onClicked: () => appload.sendMessage(99, "")
                 }
             }
-            Rectangle {
-                border.width: 2
-                border.color: "black"
-                width: 100
-                height: 100
-                 Text {
-                    text: "Close"
-                    font.pointSize: 24
-                    anchors.centerIn: parent
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: () => popup.open()
-                    // onClicked: () => appload.sendMessage(99, "")
-                }
-            }
 
             Rectangle {
                 id: button
                 border.width: 2
                 border.color: "black"
-                width: 600
+                width: 400
                 Layout.preferredHeight: numpad.visible ? 600 : 60
                 
                 MouseArea {
@@ -470,16 +530,23 @@ Rectangle {
                         visible: true
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+                        rowSpacing: -1
+                        columnSpacing: -1
                         columns: 3
                         rows: 4 
 
                         // Number buttons (1-9)
                         Repeater {
                             model: 9
-                            Button {
+                            Rectangle {
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
-                                onClicked: () => manga_id += String(index + 1)
+                                border.width: 2
+                                border.color: "black"
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: () => manga_id += String(index + 1)
+                                }
                                 Text {
                                     anchors.centerIn: parent
                                     font.pointSize: 24
@@ -487,30 +554,45 @@ Rectangle {
                                 }
                             }
                         }
-                        Button {
+                        Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            onClicked: () => manga_id += String(0)
+                            border.width: 2
+                            border.color: "black"
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: () => manga_id += String(0)
+                            }
                             Text {
                                 anchors.centerIn: parent
                                 font.pointSize: 24
                                 text: String(0)
                             }
                         }
-                        Button {
+                        Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            onClicked: () => { appload.sendMessage(1, "id:" + manga_id); manga_id = ""; numpad.visible = false }
+                            border.width: 2
+                            border.color: "black"
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: () => { appload.sendMessage(1, "id:" + manga_id); manga_id = ""; numpad.visible = false }
+                            }
                             Text {
                                 anchors.centerIn: parent
                                 font.pointSize: 24
                                 text: "Enter!"
                             }
                         }
-                        Button {
+                        Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            onClicked: () => manga_id = ""
+                            border.width: 2
+                            border.color: "black"
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: () => manga_id = ""
+                            }
                             Text {
                                 anchors.centerIn: parent
                                 font.pointSize: 24
