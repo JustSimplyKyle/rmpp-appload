@@ -11,6 +11,10 @@ Rectangle {
     property var chapters: []
     property string activePage: "mangaReading"
     property var pages
+    property int currPage
+    property int totalPage
+    property int currChpt
+    property int totalChpt
 
     Component.onCompleted: {
         pages = new Map();
@@ -24,13 +28,12 @@ Rectangle {
         onMessageReceived: (type, contents) => {
             switch(type){
                 case 101:
-                    // const s = pages.get(currChpt.text).get(parseInt(currPage.text)-1).pageUrl;
-                    const chapter = pages.get(currChpt.text);
+                    const chapter = pages.get(currChpt);
                     if(!chapter) {
                         backendImage.source = "https://w7.pngwing.com/pngs/773/130/png-transparent-data-download-downloader-downloading-transfer-free-system-and-user-interface-icon-thumbnail.png"
                         break;
                     }
-                    const pagef = chapter.get(parseInt(currPage.text) - 1);
+                    const pagef = chapter.get(parseInt(currPage) - 1);
                     if(!pagef) {
                         backendImage.source = "https://w7.pngwing.com/pngs/773/130/png-transparent-data-download-downloader-downloading-transfer-free-system-and-user-interface-icon-thumbnail.png"
                         break;
@@ -43,71 +46,82 @@ Rectangle {
                     backendImage.source = url;
                     break;
                 case 11:
-                    stat.text = `${contents}`
+                    // stat.text = `${contents}`
                     break;
                 case 2:
                     break;
                 case 4:
-                    currPage.text = `${contents}`
-                    pageSeparater.text = "/"
-                    pageStarter.text = "page:"
+                    currPage = parseInt(`${contents}`)
                     break;
                 case 5:
-                    totalPage.text = `${contents}`
-                    pageSeparater.text = "/"
-                    pageStarter.text = "page:"
+                    totalPage = parseInt(`${contents}`)
                     break;
                 case 6:
-                    currChpt.text = `${contents}`
+                    currChpt = parseInt(`${contents}`)
 
-                    if(!pages.get(currChpt.text)) {
+                    if(!pages.get(currChpt)) {
                         const obj = Qt.createQmlObject(`
                             import QtQuick
                             ListModel {}
                         `, base, "myDynamicSnippet");
-                        pages.set(currChpt.text, obj);
+                        pages.set(currChpt, obj);
                     }
-                    chptSeparater.text = "/"
-                    chptStarter.text = "chapter:"
                     break;
                 case 7:
-                    totalChpt.text = `${contents}`
-                    chptSeparater.text = "/"
-                    chptStarter.text = "chapter:"
+                    totalChpt = `${contents}`
                     break;
                 case 8:
                     chapters = contents.split('\n')
                     chapterList.model = chapters.length
                     break;
                 case 9:
-                    const targetChpt = contents;
+                    const targetChpt = parseInt(contents);
                     let pageModel = pages.get(targetChpt);
-                    for(let i = 0; i < parseInt(totalPage.text); i++) {
+                    for(let i = 0; i < totalPage; i++) {
                         const page = pageModel.get(i);
                         if(!page) {
                             pageModel.append({ "pageUrl": "https://w7.pngwing.com/pngs/773/130/png-transparent-data-download-downloader-downloading-transfer-free-system-and-user-interface-icon-thumbnail.png" });
                         }
                     }
-                    if (parseInt(targetChpt) === parseInt(currChpt.text)) {
+                    if (targetChpt === currChpt) {
                         pageList.model = pageModel;
                         pageList.forceLayout();
                     }
                     break;
                 case 10:
                     const arr = contents.split('\n');
-                    const targetChapter = arr[0];
-                    const targetPage = arr[1];
+                    const targetChapter = parseInt(arr[0]);
+                    const targetPage = parseInt(arr[1]);
                     const path = arr[2];
                     const ageModel = pages.get(targetChapter);
                     ageModel.get(targetPage).pageUrl = path;
-                    if(parseInt(targetChapter) === parseInt(currChpt.text)) {
-                        if(parseInt(targetPage) + 1 === parseInt(currPage.text)) {
+                    if(targetChapter === currChpt) {
+                        if(targetPage + 1 === currPage) {
                             backendImage.source = path;
                         }
                         pageList.model = ageModel;
                         pageList.forceLayout();
                         // pageList.model.get(targetPage).pageUrl = path;
                     }
+                    break;
+                case 12:
+                    const s1 = contents;
+                    description.text = s1;
+                    break;
+                case 13:
+                    const s2 = contents;
+                    author.name = s2;
+                    break;
+                case 14:
+                    const s3 = contents;
+                    backendImage.source = s3;
+                    break;
+                case 15:
+                    mangaName.text = `${contents}`;
+                    break;
+                case 16:
+                    dateDisplay.date = contents;
+                    break;
             }
         }
     }
@@ -148,7 +162,7 @@ Rectangle {
                     stepSize: 1
                     from: 1
                     value: 1
-                    to: parseInt(totalPage.text)
+                    to: totalPage
                 }
             }
         }
@@ -171,6 +185,25 @@ Rectangle {
                     popup.close();
                 }
             }
+        }
+    }
+    Rectangle {
+        z: 1
+        anchors.top: view.top
+        anchors.left: view.left
+        border.width: 2
+        border.color: "red"
+        width: 100
+        height: 100
+        MouseArea {
+            anchors.fill: parent
+            onClicked: () => { appload.sendMessage(99, "") }
+        }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 20
+            fillMode: Image.PreserveAspectFit
+            source: "https://cdn-icons-png.flaticon.com/512/75/75519.png"
         }
     }
 
@@ -232,7 +265,6 @@ Rectangle {
                         anchors.fill: parent
                         onClicked: () => {
                             activePage = "pageList"
-                            // appload.sendMessage(8, "")
                         }
                     }
                     Text {
@@ -245,9 +277,23 @@ Rectangle {
                     height: 45
                     border.width: 2
                     border.color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            activePage = "mangaReading"
+                            selectionFooter.visible = true
+                            pages = new Map();
+                            backendImage.source = ""
+                            manga_id = "";
+                            totalChpt = 0;
+                            description.text = "";
+                            author.name = "";
+                            dateDisplay.date = "";
+                        }
+                    }
                     Text {
                         font.pointSize: 24
-                        text: "Change chapter"
+                        text: "Search Manga"
                     }
                 }
                 Rectangle {
@@ -380,7 +426,7 @@ Rectangle {
             interactive: false
             highlightMoveDuration: 0
 
-            model: pages.get(currChpt.text)
+            model: pages.get(currChpt)
 
             header: Rectangle {
                 width: view.width
@@ -476,224 +522,477 @@ Rectangle {
                 }
             }
         }
-
         RowLayout {
-            id: layout
+            id: selectionFooter
             Layout.fillWidth: true
-
+            Layout.fillHeight: false
+            Layout.preferredHeight: selectionFooter.visible ? 450 : 0
+            spacing: -1
             Rectangle {
-                border.width: 2
-                border.color: "black"
-                width: 100
-                height: 100
-                 Text {
-                    text: "Close"
-                    font.pointSize: 24
-                    anchors.centerIn: parent
-                }
-
-                MouseArea {
+                Layout.preferredWidth: 300
+                Layout.fillHeight: true
+                GridLayout {
+                    id: numpad
+                    visible: true
                     anchors.fill: parent
-                    // onClicked: () => popup.open()
-                    onClicked: () => appload.sendMessage(99, "")
-                }
-            }
+                    rowSpacing: -1
+                    columnSpacing: -1
+                    columns: 3
+                    rows: 4 
 
-            Rectangle {
-                id: button
-                border.width: 2
-                border.color: "black"
-                width: 400
-                Layout.preferredHeight: numpad.visible ? 600 : 60
-                
-                MouseArea {
-                    anchors.top: parent.top
-                    anchors.left: parent.left
-                    height: 60
-                    width: 600
-                    onClicked: () => numpad.visible = !numpad.visible
-                }
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    Rectangle {
-                        width: 300
-                        height: 60
-                        color: "transparent"
-                        Text {
-                            font.pointSize: 24
-                            text: "mangid: " + manga_id
+                    // Number buttons (1-9)
+                    Repeater {
+                        model: 9
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            border.width: 2
+                            border.color: "black"
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: () => { manga_id += String(index + 1); confirmManga.clicked = false }
+                            }
+                            Text {
+                                anchors.centerIn: parent
+                                font.pointSize: 24
+                                text: String(index + 1)
+                            }
                         }
                     }
-                    GridLayout {
-                        id: numpad
-                        visible: true
+                    Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        rowSpacing: -1
-                        columnSpacing: -1
-                        columns: 3
-                        rows: 4 
-
-                        // Number buttons (1-9)
-                        Repeater {
-                            model: 9
+                        Layout.columnSpan: 2
+                        border.width: 2
+                        border.color: "black"
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: () => { manga_id += String(0); confirmManga.clicked = false }
+                        }
+                        Text {
+                            anchors.centerIn: parent
+                            font.pointSize: 24
+                            text: String(0)
+                        }
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        border.width: 2
+                        border.color: "black"
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: () => { manga_id = manga_id.slice(0, -1); confirmManga.clicked = false }
+                        }
+                        Image {
+                            anchors.fill: parent
+                            anchors.margins: 20
+                            fillMode: Image.PreserveAspectFit
+                            clip: true
+                            source: "https://cdn-icons-png.flaticon.com/512/318/318218.png"
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: -1
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: false
+                        Layout.preferredHeight: 450 / 4
+                        RowLayout {
+                            anchors.fill: parent
+                            spacing: -1
+                            Rectangle {
+                                id: block
+                                Layout.preferredWidth: selectionFooter.implicitWidth / 3
+                                Layout.fillHeight: true
+                                border.width: 2
+                                border.color: "black"
+                                Text {
+                                    anchors.centerIn: parent
+                                    font.pointSize: 36
+                                    text: "ID"
+                                }
+                            }
                             Rectangle {
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
                                 border.width: 2
                                 border.color: "black"
+                                Text {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.leftMargin: 20
+                                    anchors.rightMargin: 20
+                                    font.pointSize: 36
+                                    text: manga_id
+                                }
+                            }
+                            Rectangle {
+                                Layout.preferredWidth: selectionFooter.implicitWidth / 2
+                                Layout.fillHeight: true
+                                border.width: 2
+                                border.color: confirmManga.clicked ? "green" : "blue"
+                                MouseArea {
+                                    id: confirmManga
+                                    anchors.fill: parent
+                                    property bool clicked: false
+                                    onClicked: () => {
+                                        if(clicked) {
+                                            appload.sendMessage(10, "");
+                                            selectionFooter.visible = false;
+                                            clicked = false
+                                        } else {
+                                            appload.sendMessage(1, "id:" + manga_id);
+                                            clicked = true;
+                                            backendImage.source = ""
+                                        }
+                                    }
+                                }
+                                Image {
+                                    anchors.fill: parent
+                                    anchors.margins: 5
+                                    fillMode: Image.PreserveAspectCrop
+                                    source: "https://media.istockphoto.com/id/1133442802/vector/green-checkmark-vector-illustration.jpg?s=612x612&w=0&k=20&c=NqyVOdwANKlbJNqbXjTvEp2wIZWUKbfUbRxm9ROPk6M="
+                                }
+                            }
+                            Rectangle {
+                                Layout.preferredWidth: selectionFooter.implicitWidth / 2
+                                Layout.fillHeight: true
+                                border.width: 2
+                                border.color: "red"
                                 MouseArea {
                                     anchors.fill: parent
-                                    onClicked: () => manga_id += String(index + 1)
+                                    onClicked: () => { manga_id = ""; backendImage.source = ""; confirmManga.clicked = false }
                                 }
+                                Image {
+                                    anchors.fill: parent
+                                    fillMode: Image.PreserveAspectFit
+                                    source: "https://static.thenounproject.com/png/5507757-200.png"
+                                }
+                            }
+                        }
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: false
+                        Layout.preferredHeight: 450 / 4 / 2
+                        RowLayout {
+                            anchors.fill: parent
+                            spacing: -1
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                border.width: 2
+                                border.color: "black"
                                 Text {
-                                    anchors.centerIn: parent
+                                    id: author
+                                    property string name: ""
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
                                     font.pointSize: 24
-                                    text: String(index + 1)
+                                    anchors.leftMargin: 5
+                                    anchors.rightMargin: 5
+                                    text: "Author: " + author.name
+                                }
+                            }
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                border.width: 2
+                                border.color: "black"
+                                Text {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    font.pointSize: 24
+                                    anchors.leftMargin: 5
+                                    anchors.rightMargin: 5
+                                    text: totalChpt ? "Chapters: " + totalChpt : "Chapters: "
+                                }
+                            }
+                            Rectangle {
+                                Layout.preferredWidth: selectionFooter.implicitWidth
+                                Layout.fillHeight: true
+                                border.width: 2
+                                border.color: "black"
+                                Text {
+                                    id: dateDisplay
+                                    property string date;
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    font.pointSize: 24
+                                    anchors.leftMargin: 5
+                                    anchors.rightMargin: 5
+                                    text: "Date: " + dateDisplay.date
                                 }
                             }
                         }
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            border.width: 2
-                            border.color: "black"
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: () => manga_id += String(0)
-                            }
-                            Text {
-                                anchors.centerIn: parent
-                                font.pointSize: 24
-                                text: String(0)
-                            }
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        border.width: 2
+                        border.color: "black"
+                        Text {
+                            id: description
+                            anchors.fill: parent
+                            anchors.margins: 20
+                            font.pointSize: 24
+                            wrapMode: Text.Wrap
                         }
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            border.width: 2
-                            border.color: "black"
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: () => { appload.sendMessage(1, "id:" + manga_id); manga_id = ""; numpad.visible = false }
-                            }
-                            Text {
-                                anchors.centerIn: parent
-                                font.pointSize: 24
-                                text: "Enter!"
-                            }
-                        }
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            border.width: 2
-                            border.color: "black"
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: () => manga_id = ""
-                            }
-                            Text {
-                                anchors.centerIn: parent
-                                font.pointSize: 24
-                                text: "Clear!"
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                id: prev
-                border.width: 2
-                border.color: "black"
-                width: 300
-                height: 150
-
-                Text {
-                    text: "Prev chapter"
-                    font.pointSize: 24
-                    anchors.centerIn: parent
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: () => appload.sendMessage(4, "")
-                }
-            }
-
-
-            Rectangle {
-                id: next
-                border.width: 2
-                border.color: "black"
-                width: 300
-                height: 150
-
-                Text {
-                    text: "Next chapter"
-                    font.pointSize: 24
-                    anchors.centerIn: parent
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: () => appload.sendMessage(5, "")
-                }
-            }
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                Text {
-                    id: stat
-                    font.pointSize: 24
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text {
-                        id: pageStarter
-                        font.pointSize: 24
-                    }
-                    
-                    Text {
-                        id: currPage
-                        font.pointSize: 24
-                    }
-
-                    Text {
-                        id: pageSeparater
-                        font.pointSize: 24
-                    }
-
-                    Text {
-                        id: totalPage
-                        font.pointSize: 24
-                    }
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text {
-                        id: chptStarter
-                        font.pointSize: 24
-                    }
-                    
-                    Text {
-                        id: currChpt
-                        font.pointSize: 24
-                    }
-
-                    Text {
-                        id: chptSeparater
-                        font.pointSize: 24
-                    }
-
-                    Text {
-                        id: totalChpt
-                        font.pointSize: 24
                     }
                 }
             }
         }
+
+        RowLayout {
+            id: layout
+            visible: !selectionFooter.visible
+            Layout.fillWidth: true
+            Layout.fillHeight: false
+            Layout.preferredHeight: layout.visible ? 150 : 0
+            spacing: -1
+            Rectangle {
+                id: mangaNameContainer
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                border.width: 2
+                border.color: "black"
+                RowLayout {
+                    anchors.fill: parent
+                    Layout.alignment: Qt.AlignVCenter | Qt.AlignHCenter
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Text {
+                            id: mangaName
+                            anchors.centerIn: parent
+                            font.pointSize: 24
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                id: detailContainer
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                border.width: 2
+                border.color: "black"
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: -1
+                    Layout.alignment: Qt.AlignVCenter
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        border.width: 2
+                        border.color: "black"
+                        RowLayout {
+                            anchors.fill: parent
+                            spacing: -1
+                            Rectangle {
+                                id: prev
+                                border.width: 2
+                                border.color: "black"
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    Item {
+                                        Layout.leftMargin: 5
+                                        Layout.topMargin: 25
+                                        Layout.alignment: Qt.AlignTop
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        Text {
+                                            text: "Previous"
+                                            font.pointSize: 24
+                                        }
+                                    }
+                                    Item {
+                                        Layout.leftMargin: 5
+                                        Layout.bottomMargin: 25
+                                        Layout.alignment: Qt.AlignBottom
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        Text {
+                                            text: "chapter"
+                                            font.pointSize: 24
+                                        }
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: () => appload.sendMessage(4, "")
+                                }
+                            }
+                            Rectangle {
+                                id: next
+                                border.width: 2
+                                border.color: "black"
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    Item {
+                                        Layout.leftMargin: 20
+                                        Layout.topMargin: 25
+                                        Layout.alignment: Qt.AlignTop
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        Text {
+                                            text: "Next"
+                                            font.pointSize: 24
+                                        }
+                                    }
+                                    Item {
+                                        Layout.leftMargin: 20
+                                        Layout.bottomMargin: 25
+                                        Layout.alignment: Qt.AlignBottom
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        Text {
+                                            text: "chapter"
+                                            font.pointSize: 24
+                                        }
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: () => appload.sendMessage(5, "")
+                                }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        border.width: 2
+                        border.color: "black"
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: -1
+                            Item {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.alignment: Qt.AlignTop
+                                Layout.topMargin: 25
+                                Layout.leftMargin: 20
+                                Layout.rightMargin: 20
+                                RowLayout {
+                                    anchors.fill: parent
+                                    Text {
+                                        font.pointSize: 24
+                                        text: "Page:    "
+                                    }
+                    
+                                    Text {
+                                        font.pointSize: 24
+                                        text: `${currPage}/${totalPage}`
+                                    }
+                                }
+                            }
+                            Item {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.alignment: Qt.AlignBottom
+                                Layout.bottomMargin: 25
+                                Layout.leftMargin: 20
+                                Layout.rightMargin: 20
+                                RowLayout {
+                                    anchors.fill: parent
+                                    Text {
+                                        font.pointSize: 24
+                                        text: "Chapter:"
+                                    }
+                    
+                                    Text {
+                                        font.pointSize: 24
+                                        text: `${currChpt}/${totalChpt}`
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // ColumnLayout {
+                //     Layout.fillWidth: true
+                //     Layout.fillHeight: true
+                //     // Text {
+                //     //     id: stat
+                //     //     font.pointSize: 24
+                //     // }
+
+
+                // }
+            }
+        }
+
+        // RowLayout {
+        //     id: layout
+        //     Layout.fillWidth: true
+
+        //     Rectangle {
+        //         border.width: 2
+        //         border.color: "black"
+        //         width: 100
+        //         height: 100
+        //          Text {
+        //             text: "Close"
+        //             font.pointSize: 24
+        //             anchors.centerIn: parent
+        //         }
+
+        //         MouseArea {
+        //             anchors.fill: parent
+        //             // onClicked: () => popup.open()
+        //             onClicked: () => appload.sendMessage(99, "")
+        //         }
+        //     }
+
+        //     Rectangle {
+        //         id: button
+        //         border.width: 2
+        //         border.color: "black"
+        //         width: 400
+        //         Layout.preferredHeight: numpad.visible ? 600 : 60
+                
+        //         MouseArea {
+        //             anchors.top: parent.top
+        //             anchors.left: parent.left
+        //             height: 60
+        //             width: 600
+        //             onClicked: () => numpad.visible = !numpad.visible
+        //         }
+
+        //         ColumnLayout {
+        //             anchors.fill: parent
+        //             Rectangle {
+        //                 width: 300
+        //                 height: 60
+        //                 color: "transparent"
+        //                 Text {
+        //                     font.pointSize: 24
+        //                     text: "mangid: " + manga_id
+        //                 }
+        //             }
+        //         }
+        //     }
+
+
+        // }
     }
 }
