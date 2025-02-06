@@ -34,7 +34,7 @@ struct Sl {
     m: String,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SManga {
     pub url: String,
     pub title: String,
@@ -43,10 +43,17 @@ pub struct SManga {
     pub description: Option<String>,
     pub genre: Option<String>,
     pub status: MangaStatus,
+    pub last_updated_time: String,
     initialized: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+impl Default for SManga {
+    fn default() -> Self {
+        Self::create()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum MangaStatus {
     Unknown,
     Ongoing,
@@ -743,8 +750,11 @@ impl Manhuagui {
             Selector::parse("div#intro-all").map_err(|x| anyhow::anyhow!("{x}"))?;
         let thumbnail_selector =
             Selector::parse("p.hcover > img").map_err(|x| anyhow::anyhow!("{x}"))?;
-        let author_selector = Selector::parse("span > a").map_err(|x| anyhow::anyhow!("{x}"))?;
-        let genre_selector = Selector::parse("span > a").map_err(|x| anyhow::anyhow!("{x}"))?;
+        let author_selector =
+            Selector::parse("span > strong").map_err(|x| anyhow::anyhow!("{x}"))?;
+        let genre_selector =
+            Selector::parse("span > strong").map_err(|x| anyhow::anyhow!("{x}"))?;
+        let date_selector = Selector::parse("span > strong").map_err(|x| anyhow::anyhow!("{x}"))?;
         let status_selector =
             Selector::parse("div.book-detail > ul.detail-list > li.status > span > span")
                 .map_err(|x| anyhow::anyhow!("{x}"))?;
@@ -763,26 +773,61 @@ impl Manhuagui {
             .select(&thumbnail_selector)
             .next()
             .and_then(|el| el.value().attr("src").map(String::from));
+
+        let span_matcher =
+            |selector, filterer: fn(String) -> bool, element_filterer: fn(&str) -> bool| {
+                document
+                    .select(&selector)
+                    .filter(|x| {
+                        let x = x.text().collect::<String>();
+                        filterer(x)
+                    })
+                    .filter_map(|strong| {
+                        Some(
+                            strong
+                                .parent()?
+                                .children()
+                                .filter(move |x| x.id() != strong.id()),
+                        )
+                    })
+                    .flatten()
+                    .filter_map(|x| x.value().as_element().map(|y| (x.id(), y)))
+                    .filter(|(_, x)| element_filterer(x.name()))
+                    .filter_map(|(id, _)| document.tree.get(id)?.first_child()?.value().as_text())
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>()
+            };
+
         manga.author = Some(
-            document
-                .select(&author_selector)
-                .map(|el| el.text().collect::<String>())
-                .filter(|x| x.contains("漫画作者") || x.contains("漫画作者"))
-                .collect::<Vec<String>>()
-                .join(", ")
-                .trim()
-                .to_owned(),
+            span_matcher(
+                author_selector,
+                |x| x.contains("漫画作者") || x.contains("漫畫作者"),
+                |x| x == "a",
+            )
+            .join(", ")
+            .trim()
+            .to_owned(),
         );
         manga.genre = Some(
-            document
-                .select(&genre_selector)
-                .map(|el| el.text().collect::<String>())
-                .filter(|x| x.contains("漫画剧情") || x.contains("漫畫劇情"))
-                .collect::<Vec<String>>()
-                .join(", ")
-                .trim()
-                .to_owned(),
+            span_matcher(
+                genre_selector,
+                |x| x.contains("漫画剧情") || x.contains("漫畫劇情"),
+                |x| x == "a",
+            )
+            .join(", ")
+            .trim()
+            .to_owned(),
         );
+
+        manga.last_updated_time = span_matcher(
+            date_selector,
+            |x| x.contains("漫畫狀態") || x.contains("漫画状态"),
+            |x| x == "span",
+        )
+        .get(1)
+        .cloned()
+        .unwrap_or_default();
+
         manga.status = match document
             .select(&status_selector)
             .next()
@@ -873,6 +918,7 @@ impl SManga {
             genre: None,
             status: MangaStatus::Unknown,
             initialized: false,
+            last_updated_time: String::new(),
         }
     }
     #[must_use]
@@ -960,6 +1006,7 @@ mod tests {
             genre: Some(String::from("热血,冒险,励志")),
             status: MangaStatus::Ongoing,
             initialized: false,
+            last_updated_time: String::from("2024-11-08")
         };
         let result = manhuagui.fetch_manga_details(&mut manga).await;
         assert!(result.is_ok());

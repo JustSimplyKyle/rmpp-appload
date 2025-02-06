@@ -11,7 +11,7 @@ use std::{
 use anyhow::{bail, Context};
 use appload_client::{start, AppLoadBackend, BackendReplier, Message, MSG_SYSTEM_NEW_COORDINATOR};
 use async_trait::async_trait;
-use backend::{Manhuagui, Preferences, SChapter};
+use backend::{Manhuagui, Preferences, SChapter, SManga};
 use futures_util::StreamExt;
 use image::{codecs::png::PngEncoder, ImageReader};
 use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
@@ -41,6 +41,7 @@ enum RecvMessage {
     GetChapterList,
     SelectChapter(usize),
     SelectPage(usize),
+    ConfirmMangaSearch,
     Quit,
 }
 
@@ -57,6 +58,7 @@ impl TryFrom<Message> for RecvMessage {
             6 => Self::GetChapterList,
             7 => Self::SelectChapter(message.contents.parse()?),
             9 => Self::SelectPage(message.contents.parse()?),
+            10 => Self::ConfirmMangaSearch,
             99 => Self::Quit,
             _ => bail!("Unknown message received."),
         };
@@ -77,6 +79,11 @@ enum SendMessage {
         path: PathBuf,
     },
     Status(String),
+    MangaDescription(String),
+    MangaAuthor(String),
+    MangaPreview(PathBuf),
+    MangaName(String),
+    MangaLastUpdatedTime(String),
     BackendImage,
 }
 
@@ -98,6 +105,14 @@ impl SendMessage {
                 (10, Some(msg))
             }
             Self::Status(s) => (11, Some(s)),
+            Self::MangaDescription(s) => (12, Some(s)),
+            Self::MangaAuthor(s) => (13, Some(s)),
+            Self::MangaPreview(path) => {
+                let msg = format!("file:{}", path.display());
+                (14, Some(msg))
+            }
+            Self::MangaName(s) => (15, Some(s)),
+            Self::MangaLastUpdatedTime(s) => (16, Some(s)),
             Self::BackendImage => (101, None),
         }
     }
@@ -113,7 +128,12 @@ trait ReplierExt {
 impl ReplierExt for BackendReplier {
     fn send_typed_message(&self, msg: SendMessage) -> anyhow::Result<()> {
         let (msg, contents) = msg.display();
-        self.send_message(msg, contents.as_ref().map_or("placeholder", |v| v))
+        let mut contents = contents.as_ref().map_or("placeholder", |v| v);
+        if contents.is_empty() {
+            println!("empty content! adding placeholder text for protection");
+            contents = "placeholder";
+        }
+        self.send_message(msg, contents)
     }
 }
 
@@ -134,13 +154,18 @@ impl MyBackend {
                 let api = &*self.api;
                 functionality.send_typed_message(SendMessage::status("starts downloading"))?;
 
-                let body = api
+                let Some(body) = api
                     .fetch_search_manga(0, &search_term, vec![])
                     .await?
                     .mangas
                     .into_iter()
                     .next()
-                    .context("empty")?;
+                else {
+                    functionality.send_typed_message(SendMessage::MangaDescription(
+                        "Manga does not exists!".into(),
+                    ))?;
+                    return Ok(());
+                };
 
                 functionality.send_typed_message(SendMessage::status("body finished!"))?;
 
@@ -164,13 +189,17 @@ impl MyBackend {
 
                 functionality.send_typed_message(SendMessage::status("page list downloaded"))?;
 
-                self.active = MangaReader {
+                let search = MangaReader {
                     pages: result,
                     page: 0,
                     chapters,
                     chapter: 0,
+                    details: body,
                 };
-                self.state = State::Reading;
+                self.state = State::Search {
+                    search: Box::new(search),
+                    confirm: false,
+                };
             }
             RecvMessage::NextPage => {
                 let manga = &mut self.active;
@@ -218,6 +247,13 @@ impl MyBackend {
                     remove_dir_all("/tmp/mangarr")?;
                 }
                 exit(0);
+            }
+            RecvMessage::ConfirmMangaSearch => {
+                let State::Search { search: manga, .. } = &mut self.state else {
+                    bail!("impossible state reached");
+                };
+                self.active = std::mem::take(manga);
+                self.state = State::Reading;
             }
         };
         self.react_to_state(functionality).await?;
@@ -286,23 +322,14 @@ impl MyBackend {
         Ok(())
     }
 
-    async fn react_to_state(&self, functionality: &BackendReplier) -> Result<(), anyhow::Error> {
+    async fn react_to_state(
+        &mut self,
+        functionality: &BackendReplier,
+    ) -> Result<(), anyhow::Error> {
         match self.state {
             State::Idleing => {}
             State::Reading => {
-                let manga_reader = &self.active;
-
-                functionality
-                    .send_typed_message(SendMessage::ActivePageNumber(manga_reader.page + 1))?;
-
-                functionality
-                    .send_typed_message(SendMessage::TotalPageSize(manga_reader.pages.len()))?;
-                functionality.send_typed_message(SendMessage::ActiveChapterNumber(
-                    manga_reader.chapter + 1,
-                ))?;
-                functionality.send_typed_message(SendMessage::TotalChapterSize(
-                    manga_reader.chapters.len(),
-                ))?;
+                self.active.send_page_information(*functionality)?;
 
                 for (_, v) in self
                     .handlers
@@ -327,7 +354,24 @@ impl MyBackend {
             } => {
                 functionality.send_typed_message(SendMessage::ChapterList(chapters.to_string()))?;
             }
-            State::Search => todo!(),
+            State::Search {
+                ref mut search,
+                confirm,
+            } => {
+                if confirm {
+                    let manga = std::mem::take(search);
+                    self.active = *manga;
+                    self.state = State::Reading;
+                    Box::pin(self.react_to_state(functionality)).await?;
+                    return Ok(());
+                }
+                search.send_details(*functionality)?;
+                search.send_page_information(*functionality)?;
+                search.save_to_disk(&self.api, 0).await?;
+                functionality.send_typed_message(SendMessage::MangaPreview(
+                    search.get_url_with_path(0)?.1,
+                ))?;
+            }
         };
         Ok(())
     }
@@ -335,12 +379,18 @@ impl MyBackend {
 
 enum State {
     Idleing,
-    ChapterList { output: String },
+    ChapterList {
+        output: String,
+    },
     Reading,
-    Search,
+    Search {
+        search: Box<MangaReader>,
+        confirm: bool,
+    },
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 struct MangaReader {
+    details: SManga,
     chapters: Vec<SChapter>,
     chapter: usize,
     pages: Vec<String>,
@@ -348,6 +398,27 @@ struct MangaReader {
 }
 
 impl MangaReader {
+    pub fn send_details(&self, functionality: BackendReplier) -> anyhow::Result<()> {
+        if let Some(description) = self.details.description.clone() {
+            functionality.send_typed_message(SendMessage::MangaDescription(description))?;
+        }
+        if let Some(author) = self.details.author.clone() {
+            functionality.send_typed_message(SendMessage::MangaAuthor(author))?;
+        }
+        functionality.send_typed_message(SendMessage::MangaLastUpdatedTime(
+            self.details.last_updated_time.clone(),
+        ))?;
+        functionality.send_typed_message(SendMessage::MangaName(self.details.title.clone()))?;
+        Ok(())
+    }
+    pub fn send_page_information(&self, functionality: BackendReplier) -> anyhow::Result<()> {
+        functionality.send_typed_message(SendMessage::ActivePageNumber(self.page + 1))?;
+
+        functionality.send_typed_message(SendMessage::TotalPageSize(self.pages.len()))?;
+        functionality.send_typed_message(SendMessage::ActiveChapterNumber(self.chapter + 1))?;
+        functionality.send_typed_message(SendMessage::TotalChapterSize(self.chapters.len()))?;
+        Ok(())
+    }
     pub async fn next_chapter(&mut self, api: &Manhuagui) -> anyhow::Result<()> {
         self.chapter += 1;
         self.update_chapter(api).await
