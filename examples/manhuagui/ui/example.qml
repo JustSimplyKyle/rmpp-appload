@@ -265,6 +265,8 @@ Rectangle {
                         anchors.fill: parent
                         onClicked: () => {
                             activePage = "pageList"
+                            pageList.row = currPage/4;
+                            pageList.positionViewAtIndex(pageList.row*4, GridView.Beginning);
                         }
                     }
                     Text {
