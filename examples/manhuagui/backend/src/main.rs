@@ -13,7 +13,10 @@ use appload_client::{start, AppLoadBackend, BackendReplier, Message, MSG_SYSTEM_
 use async_trait::async_trait;
 use backend::{Manhuagui, Preferences, SChapter, SManga};
 use futures_util::StreamExt;
-use image::{codecs::png::PngEncoder, ImageReader};
+use image::{
+    codecs::png::PngEncoder, imageops::FilterType, DynamicImage, GenericImageView, ImageReader,
+    Rgba,
+};
 use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
 
 #[tokio::main]
@@ -443,11 +446,36 @@ impl MangaReader {
         if !PathBuf::from("/tmp/mangarr").exists() {
             create_dir("/tmp/mangarr/")?;
         }
+        if !PathBuf::from("/tmp/mangarr/preview").exists() {
+            create_dir("/tmp/mangarr/preview")?;
+        }
 
         let (url, ps) = self.get_url_with_path(page)?;
 
         if !ps.exists() {
-            Self::save_page(url, api, &ps).await?;
+            let image = Self::save_page(url, api, &ps).await?;
+            if let Some(image) = image {
+                self.generate_scaled_version(image, page).await?;
+            }
+        }
+        Ok(())
+    }
+    pub async fn generate_scaled_version(
+        &self,
+        mut original_image: DynamicImage,
+        page: usize,
+    ) -> anyhow::Result<()> {
+        original_image = original_image.resize(405, 660, FilterType::Lanczos3);
+        let (_, mut ps) = self.get_url_with_path(page)?;
+        ps = PathBuf::from("/tmp/mangarr/preview").join(ps.file_name().context("no")?);
+        if !ps.exists() {
+            let mut buf = vec![];
+
+            let encoder = PngEncoder::new(&mut buf);
+
+            original_image.write_with_encoder(encoder)?;
+
+            tokio::fs::write(ps, buf).await?;
         }
         Ok(())
     }
@@ -467,7 +495,7 @@ impl MangaReader {
         url: &str,
         api: &Manhuagui,
         path: impl AsRef<Path> + Send,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<DynamicImage>> {
         let path = path.as_ref();
         if !path.exists() {
             let bytes = api
@@ -479,24 +507,34 @@ impl MangaReader {
                 .bytes()
                 .await?;
 
-            let mut p = vec![];
+            let mut non_grayscale = vec![];
 
-            let encoder = PngEncoder::new(&mut p);
+            let non_grayscale_encoder = PngEncoder::new(&mut non_grayscale);
 
-            ImageReader::new(Cursor::new(bytes))
+            let mut image = ImageReader::new(Cursor::new(bytes))
                 .with_guessed_format()?
-                .decode()?
-                .write_with_encoder(encoder)?;
+                .decode()?;
+
+            let is_almost_grayscale = image.pixels().all(|(_, _, Rgba([r, g, b, _]))| {
+                r.abs_diff(g) < 3 && g.abs_diff(b) < 3 && r.abs_diff(b) < 3
+            });
+
+            if is_almost_grayscale {
+                image = image.grayscale();
+            }
+
+            image.write_with_encoder(non_grayscale_encoder)?;
 
             if !path.exists() {
                 let mut file = tokio::fs::File::create_new(path).await?;
 
-                file.write_all(&p).await?;
+                file.write_all(&non_grayscale).await?;
 
                 file.flush().await?;
+                return Ok(Some(image));
             }
         }
-        Ok(())
+        Ok(None)
     }
 }
 

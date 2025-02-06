@@ -4,6 +4,8 @@ import QtQuick.Layouts 1.3
 import net.asivery.AppLoad 1.0
 
 
+import xofm.libs.epaper as Epaper
+
 Rectangle {
     anchors.fill: parent
     id: base
@@ -265,7 +267,7 @@ Rectangle {
                         anchors.fill: parent
                         onClicked: () => {
                             activePage = "pageList"
-                            pageList.row = currPage/4;
+                            pageList.row = currPage/4 - 1;
                             pageList.positionViewAtIndex(pageList.row*4, GridView.Beginning);
                         }
                     }
@@ -382,6 +384,7 @@ Rectangle {
                     text: "Chapter Selection"
                 }
             }
+
             delegate: RowLayout {
                 spacing: -1
                 Rectangle {
@@ -503,7 +506,7 @@ Rectangle {
                         Image {
                             anchors.fill: parent
                             fillMode: Image.PreserveAspectFit
-                            source: pageUrl
+                            source: pageUrl.includes("file:") ? `file:/tmp/mangarr/preview/${pageUrl.slice(18, -1)}g` : pageUrl
                             asynchronous: true
                         }
 
@@ -634,6 +637,11 @@ Rectangle {
                                     anchors.rightMargin: 20
                                     font.pointSize: 36
                                     text: manga_id
+                                    Epaper.ScreenModeItem {
+                                        anchors.fill: parent
+                                        visible: true
+                                        mode: Epaper.ScreenModeItem.Animation
+                                    }
                                 }
                             }
                             Rectangle {
@@ -930,71 +938,7 @@ Rectangle {
                         }
                     }
                 }
-                // ColumnLayout {
-                //     Layout.fillWidth: true
-                //     Layout.fillHeight: true
-                //     // Text {
-                //     //     id: stat
-                //     //     font.pointSize: 24
-                //     // }
-
-
-                // }
             }
         }
-
-        // RowLayout {
-        //     id: layout
-        //     Layout.fillWidth: true
-
-        //     Rectangle {
-        //         border.width: 2
-        //         border.color: "black"
-        //         width: 100
-        //         height: 100
-        //          Text {
-        //             text: "Close"
-        //             font.pointSize: 24
-        //             anchors.centerIn: parent
-        //         }
-
-        //         MouseArea {
-        //             anchors.fill: parent
-        //             // onClicked: () => popup.open()
-        //             onClicked: () => appload.sendMessage(99, "")
-        //         }
-        //     }
-
-        //     Rectangle {
-        //         id: button
-        //         border.width: 2
-        //         border.color: "black"
-        //         width: 400
-        //         Layout.preferredHeight: numpad.visible ? 600 : 60
-                
-        //         MouseArea {
-        //             anchors.top: parent.top
-        //             anchors.left: parent.left
-        //             height: 60
-        //             width: 600
-        //             onClicked: () => numpad.visible = !numpad.visible
-        //         }
-
-        //         ColumnLayout {
-        //             anchors.fill: parent
-        //             Rectangle {
-        //                 width: 300
-        //                 height: 60
-        //                 color: "transparent"
-        //                 Text {
-        //                     font.pointSize: 24
-        //                     text: "mangid: " + manga_id
-        //                 }
-        //             }
-        //         }
-        //     }
-
-
-        // }
     }
 }
