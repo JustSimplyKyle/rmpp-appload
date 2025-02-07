@@ -170,8 +170,8 @@ impl SendMessage {
             }
             Self::MangaName(s) => (15, Some(s)),
             Self::MangaLastUpdatedTime(s) => (16, Some(s)),
-            Self::BackendImage => (101, None),
             Self::Error(s) => (1000, Some(s)),
+            Self::BackendImage => (101, None),
         }
     }
     fn status(s: impl Into<String>) -> Self {
@@ -623,7 +623,7 @@ impl AppLoadBackend for MyBackend {
 
         if let Err(err) = v.await {
             functionality
-                .send_message(1000, &format!("error: {err:#?}"))
+                .send_typed_message(SendMessage::Error(format!("error: {err:#?}")))
                 .expect("can't send message");
         }
     }
