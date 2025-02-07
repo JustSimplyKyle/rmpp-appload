@@ -4,7 +4,7 @@ import QtQuick.Layouts 1.3
 import net.asivery.AppLoad 1.0
 
 
-import xofm.libs.epaper as Epaper
+// import xofm.libs.epaper as Epaper
 
 Rectangle {
     anchors.fill: parent
@@ -12,11 +12,23 @@ Rectangle {
     property string manga_id: ""
     property var chapters: []
     property string activePage: "mangaReading"
+    property string activeBackend: "Manhuagui"
     property var pages
     property int currPage
     property int totalPage
     property int currChpt
     property int totalChpt
+
+    Rectangle {
+        anchors.fill: parent
+        visible: error.text === "" ? false : true
+        z: 1000
+        Text {
+            id: error
+            text: ""
+            font.pointSize: 36
+        }
+    }
 
     Component.onCompleted: {
         pages = new Map();
@@ -46,6 +58,9 @@ Rectangle {
                         break;
                     }
                     backendImage.source = url;
+                    break;
+                case 1000:
+                    error.text = contents;
                     break;
                 case 11:
                     // stat.text = `${contents}`
@@ -305,9 +320,16 @@ Rectangle {
                     height: 45
                     border.width: 2
                     border.color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            activePage = "backendSelection"
+                            selectionFooter.visible = false
+                        }
+                    }
                     Text {
                         font.pointSize: 24
-                        text: "Change chapter"
+                        text: "Backend Selection"
                     }
                 }
             }
@@ -363,6 +385,79 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     onClicked: () => appload.sendMessage(2, "")
+                }
+            }
+        }
+        ListModel {
+            id: backendModel
+            ListElement {
+                name: "NHentai"
+                desc: "Requires manual setup of the cf authenticatino token."
+            }
+            ListElement {
+                name: "Manhuagui"
+                desc: "The default backend. Works without any configuration."
+            }
+        }
+        GridView {
+            id: backendSelection
+            visible: activePage === "backendSelection"
+            Layout.fillWidth: backendSelection.visible ? true : false
+            Layout.fillHeight: backendSelection.visible ? true: false
+            Layout.preferredHeight: backendSelection.visible ? null : 0
+            cellWidth: view.width
+            cellHeight: 100
+            model: backendModel
+            header: Rectangle {
+                width: view.width
+                height: 80
+                Text {
+                    anchors.centerIn: parent
+                    font.pointSize: 24
+                    text: "Backend Selection"
+                }
+            }
+
+            delegate: RowLayout {
+                spacing: -1
+                Rectangle {
+                    width: 300
+                    height: backendSelection.cellHeight + 1
+                    border.width: 2
+                    border.color: "black"
+                    Text {
+                        anchors.centerIn: parent
+                        font.pointSize: 36
+                        text: name
+                    }
+                }
+                Rectangle {
+                    width: view.width - 300
+                    height: chapterList.cellHeight + 1
+                    border.width: 2
+                    border.color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            activeBackend = name;
+                            appload.sendMessage(11, name);
+                            activePage = "mangaReading"
+                            selectionFooter.visible = true
+                            pages = new Map();
+                            backendImage.source = ""
+                            manga_id = "";
+                            totalChpt = 0;
+                            description.text = "";
+                            author.name = "";
+                            dateDisplay.date = "";
+                        }
+                    }
+                    Text {
+                        anchors.centerIn: parent
+                        anchors.leftMargin: 20
+                        font.pointSize: 36
+                        text: desc
+                    }
                 }
             }
         }
@@ -613,6 +708,18 @@ Rectangle {
                             anchors.fill: parent
                             spacing: -1
                             Rectangle {
+                                id: block2
+                                Layout.preferredWidth: selectionFooter.implicitWidth 
+                                Layout.fillHeight: true
+                                border.width: 2
+                                border.color: "black"
+                                Text {
+                                    anchors.centerIn: parent
+                                    font.pointSize: 36
+                                    text: activeBackend
+                                }
+                            }
+                            Rectangle {
                                 id: block
                                 Layout.preferredWidth: selectionFooter.implicitWidth / 3
                                 Layout.fillHeight: true
@@ -637,11 +744,11 @@ Rectangle {
                                     anchors.rightMargin: 20
                                     font.pointSize: 36
                                     text: manga_id
-                                    Epaper.ScreenModeItem {
-                                        anchors.fill: parent
-                                        visible: true
-                                        mode: Epaper.ScreenModeItem.Animation
-                                    }
+                                    // Epaper.ScreenModeItem {
+                                    //     anchors.fill: parent
+                                    //     visible: true
+                                    //     mode: Epaper.ScreenModeItem.Animation
+                                    // }
                                 }
                             }
                             Rectangle {
@@ -659,7 +766,7 @@ Rectangle {
                                             selectionFooter.visible = false;
                                             clicked = false
                                         } else {
-                                            appload.sendMessage(1, "id:" + manga_id);
+                                            appload.sendMessage(1, manga_id);
                                             clicked = true;
                                             backendImage.source = ""
                                         }
@@ -766,7 +873,7 @@ Rectangle {
 
         RowLayout {
             id: layout
-            visible: !selectionFooter.visible
+            visible: (!selectionFooter.visible) && activePage != "backendSelection"
             Layout.fillWidth: true
             Layout.fillHeight: false
             Layout.preferredHeight: layout.visible ? 150 : 0

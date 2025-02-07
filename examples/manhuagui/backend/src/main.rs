@@ -5,18 +5,23 @@ use std::{
     io::Cursor,
     path::{Path, PathBuf},
     process::exit,
-    sync::{Arc, LazyLock},
+    sync::Arc,
 };
 
 use anyhow::{bail, Context};
 use appload_client::{start, AppLoadBackend, BackendReplier, Message, MSG_SYSTEM_NEW_COORDINATOR};
 use async_trait::async_trait;
-use backend::{Manhuagui, Preferences, SChapter, SManga};
+use backend::{
+    manhuagui::{Manhuagui, Preferences},
+    nhentai::NHentai,
+    MangaBackend, Page, SChapter, SManga,
+};
 use futures_util::StreamExt;
 use image::{
     codecs::png::PngEncoder, imageops::FilterType, DynamicImage, GenericImageView, ImageReader,
     Rgba,
 };
+use reqwest::Client;
 use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
 
 #[tokio::main]
@@ -26,8 +31,46 @@ async fn main() {
         .expect("backend failing to start. please cry");
 }
 
+type Backend<'a> = &'a SupportedBackends;
+
+#[derive(Debug, Clone)]
+enum SupportedBackends {
+    NHentai(NHentai),
+    Manhuagui(Manhuagui),
+}
+
+// clone of `MangaBackend` to get around object safety issues surrounding clone
+impl SupportedBackends {
+    fn client(&self) -> Client {
+        match self {
+            Self::NHentai(x) => x.client(),
+            Self::Manhuagui(x) => x.client(),
+        }
+    }
+    async fn search_by_id(&self, id: &str) -> anyhow::Result<SManga> {
+        match self {
+            Self::NHentai(x) => x.search_by_id(id).await,
+            Self::Manhuagui(x) => x.search_by_id(id).await,
+        }
+    }
+
+    async fn fetch_chapters(&self, manga: &SManga) -> anyhow::Result<Vec<SChapter>> {
+        match self {
+            Self::NHentai(x) => x.fetch_chapters(manga).await,
+            Self::Manhuagui(x) => x.fetch_chapters(manga).await,
+        }
+    }
+
+    async fn fetch_pages(&self, chapter: &SChapter) -> anyhow::Result<Vec<Page>> {
+        match self {
+            Self::NHentai(x) => x.fetch_pages(chapter).await,
+            Self::Manhuagui(x) => x.fetch_pages(chapter).await,
+        }
+    }
+}
+
 struct MyBackend {
-    api: LazyLock<Manhuagui>,
+    api: SupportedBackends,
     handlers: Arc<Mutex<HashMap<usize, Option<JoinHandle<anyhow::Result<()>>>>>>,
     active: MangaReader,
     state: State,
@@ -45,6 +88,7 @@ enum RecvMessage {
     SelectChapter(usize),
     SelectPage(usize),
     ConfirmMangaSearch,
+    SelectBackend(SupportedBackends),
     Quit,
 }
 
@@ -62,6 +106,15 @@ impl TryFrom<Message> for RecvMessage {
             7 => Self::SelectChapter(message.contents.parse()?),
             9 => Self::SelectPage(message.contents.parse()?),
             10 => Self::ConfirmMangaSearch,
+            11 => Self::SelectBackend(match &*message.contents {
+                "NHentai" => {
+                    SupportedBackends::NHentai(NHentai::new("zh-tw".into(), "zh-tw".into(), true)?)
+                }
+                "Manhuagui" => {
+                    SupportedBackends::Manhuagui(Manhuagui::new(Preferences::default())?)
+                }
+                _ => bail!("Unsupported backend."),
+            }),
             99 => Self::Quit,
             _ => bail!("Unknown message received."),
         };
@@ -87,6 +140,7 @@ enum SendMessage {
     MangaPreview(PathBuf),
     MangaName(String),
     MangaLastUpdatedTime(String),
+    Error(String),
     BackendImage,
 }
 
@@ -117,6 +171,7 @@ impl SendMessage {
             Self::MangaName(s) => (15, Some(s)),
             Self::MangaLastUpdatedTime(s) => (16, Some(s)),
             Self::BackendImage => (101, None),
+            Self::Error(s) => (1000, Some(s)),
         }
     }
     fn status(s: impl Into<String>) -> Self {
@@ -154,26 +209,15 @@ impl MyBackend {
                 println!("A frontend has connected");
             }
             RecvMessage::SearchManga(search_term) => {
-                let api = &*self.api;
+                let api = &self.api;
                 functionality.send_typed_message(SendMessage::status("starts downloading"))?;
 
-                let Some(body) = api
-                    .fetch_search_manga(0, &search_term, vec![])
-                    .await?
-                    .mangas
-                    .into_iter()
-                    .next()
-                else {
-                    functionality.send_typed_message(SendMessage::MangaDescription(
-                        "Manga does not exists!".into(),
-                    ))?;
-                    return Ok(());
-                };
+                let body = api.search_by_id(&search_term).await?;
 
                 functionality.send_typed_message(SendMessage::status("body finished!"))?;
 
                 let chapters = api
-                    .chapter_list_parse(&body)
+                    .fetch_chapters(&body)
                     .await?
                     .into_iter()
                     .rev()
@@ -184,7 +228,7 @@ impl MyBackend {
                 functionality.send_typed_message(SendMessage::status("chapter finished!"))?;
 
                 let result = api
-                    .page_list_parse(first_chapter)
+                    .fetch_pages(first_chapter)
                     .await?
                     .into_iter()
                     .map(|x| x.image_url)
@@ -245,18 +289,32 @@ impl MyBackend {
                 self.active.page = index;
                 self.state = State::Reading;
             }
-            RecvMessage::Quit => {
-                if PathBuf::from("/tmp/mangarr").exists() {
-                    remove_dir_all("/tmp/mangarr")?;
-                }
-                exit(0);
-            }
             RecvMessage::ConfirmMangaSearch => {
                 let State::Search { search: manga, .. } = &mut self.state else {
                     bail!("impossible state reached");
                 };
                 self.active = std::mem::take(manga);
                 self.state = State::Reading;
+            }
+            RecvMessage::SelectBackend(supported_backend) => {
+                use SupportedBackends as SBC;
+                let is_different = matches!(
+                    (&self.api, &supported_backend),
+                    (SBC::NHentai(_), SBC::Manhuagui(_)) | (SBC::Manhuagui(_), SBC::NHentai(_))
+                );
+                if is_different {
+                    self.api = supported_backend;
+                    self.active = MangaReader::default();
+                    if let State::Search { search: manga, .. } = &mut self.state {
+                        std::mem::take(manga);
+                    }
+                }
+            }
+            RecvMessage::Quit => {
+                if PathBuf::from("/tmp/mangarr").exists() {
+                    remove_dir_all("/tmp/mangarr")?;
+                }
+                exit(0);
             }
         };
         self.react_to_state(functionality).await?;
@@ -422,18 +480,18 @@ impl MangaReader {
         functionality.send_typed_message(SendMessage::TotalChapterSize(self.chapters.len()))?;
         Ok(())
     }
-    pub async fn next_chapter(&mut self, api: &Manhuagui) -> anyhow::Result<()> {
+    pub async fn next_chapter(&mut self, api: Backend<'_>) -> anyhow::Result<()> {
         self.chapter += 1;
         self.update_chapter(api).await
     }
-    pub async fn prev_chapter(&mut self, api: &Manhuagui) -> anyhow::Result<()> {
+    pub async fn prev_chapter(&mut self, api: Backend<'_>) -> anyhow::Result<()> {
         self.chapter -= 1;
         self.update_chapter(api).await
     }
-    async fn update_chapter(&mut self, api: &Manhuagui) -> anyhow::Result<()> {
+    async fn update_chapter(&mut self, api: Backend<'_>) -> anyhow::Result<()> {
         let chpt = &self.chapters[self.chapter];
         let pages = api
-            .page_list_parse(chpt)
+            .fetch_pages(chpt)
             .await?
             .into_iter()
             .map(|x| x.image_url)
@@ -442,7 +500,7 @@ impl MangaReader {
         self.page = 0;
         Ok(())
     }
-    pub async fn save_to_disk(&self, api: &Manhuagui, page: usize) -> anyhow::Result<()> {
+    pub async fn save_to_disk(&self, api: Backend<'_>, page: usize) -> anyhow::Result<()> {
         if !PathBuf::from("/tmp/mangarr").exists() {
             create_dir("/tmp/mangarr/")?;
         }
@@ -493,13 +551,13 @@ impl MangaReader {
     }
     async fn save_page(
         url: &str,
-        api: &Manhuagui,
+        api: Backend<'_>,
         path: impl AsRef<Path> + Send,
     ) -> anyhow::Result<Option<DynamicImage>> {
         let path = path.as_ref();
         if !path.exists() {
             let bytes = api
-                .client
+                .client()
                 .get(url)
                 .send()
                 .await?
@@ -547,9 +605,9 @@ impl Default for State {
 impl Default for MyBackend {
     fn default() -> Self {
         Self {
-            api: LazyLock::new(|| {
-                Manhuagui::new(Preferences::default()).expect("internet issues baby")
-            }),
+            api: SupportedBackends::Manhuagui(
+                Manhuagui::new(Preferences::default()).expect("invalid"),
+            ),
             state: Default::default(),
             active: Default::default(),
             handlers: Default::default(),
@@ -565,7 +623,7 @@ impl AppLoadBackend for MyBackend {
 
         if let Err(err) = v.await {
             functionality
-                .send_message(11, &format!("error: {err:#?}"))
+                .send_message(1000, &format!("error: {err:#?}"))
                 .expect("can't send message");
         }
     }
