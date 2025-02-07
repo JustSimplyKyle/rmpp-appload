@@ -4,7 +4,7 @@ import QtQuick.Layouts 1.3
 import net.asivery.AppLoad 1.0
 
 
-// import xofm.libs.epaper as Epaper
+import xofm.libs.epaper as Epaper
 
 Rectangle {
     anchors.fill: parent
@@ -744,11 +744,11 @@ Rectangle {
                                     anchors.rightMargin: 20
                                     font.pointSize: 36
                                     text: manga_id
-                                    // Epaper.ScreenModeItem {
-                                    //     anchors.fill: parent
-                                    //     visible: true
-                                    //     mode: Epaper.ScreenModeItem.Animation
-                                    // }
+                                    Epaper.ScreenModeItem {
+                                        anchors.fill: parent
+                                        visible: true
+                                        mode: Epaper.ScreenModeItem.Animation
+                                    }
                                 }
                             }
                             Rectangle {
