@@ -1,2 +1,6 @@
 **/*.qmd-pure
-/applications_root/
+**/target
+**/output-rmpp
+**/output
+applications_root/sst
+
