@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 /// This code is based on the Manhuagui extension for Tachiyomi.
 /// Source: <https://github.com/keiyoushi/extensions-source/blob/main/src/zh/manhuagui/src/eu/kanade/tachiyomi/extension/zh/manhuagui/Manhuagui.ktb>
 use anyhow::{bail, Context};
@@ -7,17 +9,29 @@ use reqwest::{
     Client,
 };
 use scraper::Html;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{MangaBackend, MangaStatus, Page, SChapter, SManga};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Manhuagui {
     pub name: String,
     pub lang: String,
     base_url: String,
-    image_server: [&'static str; 2],
-    pub client: Client,
+    image_server: [String; 2],
+
+    #[serde(skip, default = "deserialize_client")]
+    client: Client,
+}
+
+fn deserialize_client() -> Client {
+    Manhuagui::build_client(Preferences::default()).unwrap()
+}
+
+impl Display for Manhuagui {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Manhuagui")
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -55,6 +69,7 @@ struct Sl {
 }
 
 #[async_trait::async_trait]
+#[typetag::serde]
 impl MangaBackend for Manhuagui {
     fn client(&self) -> Client {
         self.client.clone()
@@ -257,8 +272,35 @@ impl Manhuagui {
             format!("https://www.{base_host}")
         };
 
-        let image_server = ["https://i.hamreus.com", "https://cf.hamreus.com"];
+        let image_server = [
+            "https://i.hamreus.com".to_string(),
+            "https://cf.hamreus.com".to_string(),
+        ];
 
+        let client = Self::build_client(preferences)?;
+
+        Ok(Self {
+            name: String::from("漫画柜"),
+            lang: String::from("zh"),
+            base_url,
+            image_server,
+            client,
+        })
+    }
+
+    fn build_client(preferences: Preferences) -> anyhow::Result<Client> {
+        let base_host = if preferences.use_mirror_url {
+            "mhgui.com"
+        } else {
+            "manhuagui.com"
+        }
+        .to_owned();
+
+        let base_url = if preferences.show_zh_hant_website {
+            format!("https://tw.{base_host}")
+        } else {
+            format!("https://www.{base_host}")
+        };
         let mut headers = HeaderMap::new();
         headers.insert(REFERER, HeaderValue::from_str(&base_url)?);
         headers.insert(
@@ -272,14 +314,7 @@ impl Manhuagui {
         }
 
         let client = Client::builder().default_headers(headers).build()?;
-
-        Ok(Self {
-            name: String::from("漫画柜"),
-            lang: String::from("zh"),
-            base_url,
-            image_server,
-            client,
-        })
+        Ok(client)
     }
 
     pub fn smanga_creation(document: &Html, url: impl Into<String>) -> SManga {

@@ -8,16 +8,28 @@ use reqwest::{
     Client, Url,
 };
 use scraper::{Html, Selector};
-use serde::Deserialize;
-use std::{env, sync::Arc};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::{env, fmt::Display, sync::Arc};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NHentai {
     pub lang: String,
     nh_lang: String,
     base_url: String,
+
+    #[serde(skip, default = "deserialize_client")]
     client: Client,
     display_full_title: bool,
+}
+
+fn deserialize_client() -> Client {
+    NHentai::build_client().unwrap()
+}
+
+impl Display for NHentai {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NHentai")
+    }
 }
 
 // Structures to represent the JSON data from nHentai
@@ -110,6 +122,18 @@ impl NHentaiData {
 impl NHentai {
     pub fn new(lang: String, nh_lang: String, display_full_title: bool) -> Result<Self> {
         let base_url = "https://nhentai.net".to_string();
+        let client = Self::build_client()?;
+        Ok(Self {
+            lang,
+            nh_lang,
+            base_url,
+            client,
+            display_full_title,
+        })
+    }
+
+    fn build_client() -> anyhow::Result<Client> {
+        let base_url = "https://nhentai.net".to_string();
         let mut headers = HeaderMap::new();
         headers.insert(REFERER, HeaderValue::from_str(&base_url)?);
 
@@ -143,13 +167,7 @@ impl NHentai {
             .cookie_provider(Arc::new(jar))
             .build()?;
 
-        Ok(Self {
-            lang,
-            nh_lang,
-            base_url,
-            client,
-            display_full_title,
-        })
+        Ok(client)
     }
 
     fn shorten_title(title: &str) -> String {
@@ -183,6 +201,7 @@ impl NHentai {
 }
 
 #[async_trait::async_trait]
+#[typetag::serde]
 impl MangaBackend for NHentai {
     fn client(&self) -> Client {
         self.client.clone()
