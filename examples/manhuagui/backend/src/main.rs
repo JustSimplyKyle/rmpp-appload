@@ -1,3 +1,5 @@
+mod bookshelf;
+
 use std::{
     collections::HashMap,
     fs::{create_dir, remove_dir_all},
@@ -9,69 +11,39 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use appload_client::{start, AppLoadBackend, BackendReplier, Message, MSG_SYSTEM_NEW_COORDINATOR};
+use appload_client::{AppLoadBackend, BackendReplier, Message, MSG_SYSTEM_NEW_COORDINATOR};
 use async_trait::async_trait;
 use backend::{
     manhuagui::{Manhuagui, Preferences},
     nhentai::NHentai,
-    MangaBackend, Page, SChapter, SManga,
+    MangaBackend, SChapter, SManga,
 };
+use bookshelf::{BookShelf, BookShelfKey};
 use futures_util::StreamExt;
 use image::{
     codecs::png::PngEncoder, imageops::FilterType, DynamicImage, GenericImageView, ImageReader,
     Rgba,
 };
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
 
 #[tokio::main]
 async fn main() {
-    start(&mut MyBackend::default())
+    appload_client::AppLoad::new(&mut MyBackend::default())
+        .expect("backend failing to start. please cry")
+        .run()
         .await
         .expect("backend failing to start. please cry");
 }
 
-type Backend<'a> = &'a SupportedBackends;
-
-#[derive(Debug, Clone)]
-enum SupportedBackends {
-    NHentai(NHentai),
-    Manhuagui(Manhuagui),
-}
-
-// clone of `MangaBackend` to get around object safety issues surrounding clone
-impl SupportedBackends {
-    fn client(&self) -> Client {
-        match self {
-            Self::NHentai(x) => x.client(),
-            Self::Manhuagui(x) => x.client(),
-        }
-    }
-    async fn search_by_id(&self, id: &str) -> anyhow::Result<SManga> {
-        match self {
-            Self::NHentai(x) => x.search_by_id(id).await,
-            Self::Manhuagui(x) => x.search_by_id(id).await,
-        }
-    }
-
-    async fn fetch_chapters(&self, manga: &SManga) -> anyhow::Result<Vec<SChapter>> {
-        match self {
-            Self::NHentai(x) => x.fetch_chapters(manga).await,
-            Self::Manhuagui(x) => x.fetch_chapters(manga).await,
-        }
-    }
-
-    async fn fetch_pages(&self, chapter: &SChapter) -> anyhow::Result<Vec<Page>> {
-        match self {
-            Self::NHentai(x) => x.fetch_pages(chapter).await,
-            Self::Manhuagui(x) => x.fetch_pages(chapter).await,
-        }
-    }
-}
-
+type Backend = dyn MangaBackend;
+#[derive(Default)]
 struct MyBackend {
-    api: SupportedBackends,
-    handlers: Arc<Mutex<HashMap<usize, Option<JoinHandle<anyhow::Result<()>>>>>>,
+    //                          (chapter, page)
+    handlers: Arc<Mutex<HashMap<(usize, usize), Option<JoinHandle<anyhow::Result<()>>>>>>,
+    bookshelf: BookShelf,
     active: MangaReader,
     state: State,
 }
@@ -88,13 +60,26 @@ enum RecvMessage {
     SelectChapter(usize),
     SelectPage(usize),
     ConfirmMangaSearch,
-    SelectBackend(SupportedBackends),
+    SelectBackend(Arc<Backend>),
+    SaveActiveToBookShelf,
+    SelectBookFromBookShelf(BookShelfKey),
+    BookShelfView,
     Quit,
 }
 
 impl TryFrom<Message> for RecvMessage {
     type Error = anyhow::Error;
     fn try_from(message: Message) -> Result<Self, Self::Error> {
+        let backend_from_str: fn(&str) -> Result<Arc<Backend>, anyhow::Error> = |x| {
+            let x = match x {
+                "NHentai" => {
+                    Arc::new(NHentai::new("zh-tw".into(), "zh-tw".into(), true)?) as Arc<Backend>
+                }
+                "Manhuagui" => Arc::new(Manhuagui::new(Preferences::default())?) as Arc<Backend>,
+                _ => bail!("Unsupported backend."),
+            };
+            anyhow::Ok(x)
+        };
         let msg = match message.msg_type {
             MSG_SYSTEM_NEW_COORDINATOR => Self::Connect,
             1 => Self::SearchManga(message.contents),
@@ -106,15 +91,15 @@ impl TryFrom<Message> for RecvMessage {
             7 => Self::SelectChapter(message.contents.parse()?),
             9 => Self::SelectPage(message.contents.parse()?),
             10 => Self::ConfirmMangaSearch,
-            11 => Self::SelectBackend(match &*message.contents {
-                "NHentai" => {
-                    SupportedBackends::NHentai(NHentai::new("zh-tw".into(), "zh-tw".into(), true)?)
-                }
-                "Manhuagui" => {
-                    SupportedBackends::Manhuagui(Manhuagui::new(Preferences::default())?)
-                }
-                _ => bail!("Unsupported backend."),
-            }),
+            11 => Self::SelectBackend(backend_from_str(&message.contents)?),
+            12 => Self::SaveActiveToBookShelf,
+            13 => {
+                let (backend, manga_url) = message.contents.split_once("\n").unwrap();
+                let backend = backend_from_str(backend)?;
+                let key = BookShelfKey::new(&*backend, manga_url.to_string());
+                Self::SelectBookFromBookShelf(key)
+            }
+            14 => Self::BookShelfView,
             99 => Self::Quit,
             _ => bail!("Unknown message received."),
         };
@@ -140,6 +125,7 @@ enum SendMessage {
     MangaPreview(PathBuf),
     MangaName(String),
     MangaLastUpdatedTime(String),
+    BookshelfMangaDetails(Box<MangaReader>),
     Error(String),
     BackendImage,
 }
@@ -170,6 +156,21 @@ impl SendMessage {
             }
             Self::MangaName(s) => (15, Some(s)),
             Self::MangaLastUpdatedTime(s) => (16, Some(s)),
+            Self::BookshelfMangaDetails(manga) => {
+                let details = manga.details;
+                let v = json![{
+                    "url"            : details.url,
+                    "title"          : details.title,
+                    "backend"        : manga.api.to_string(),
+                    "lastReadPage"   : (manga.page + 1).to_string(),
+                    "totalPages"     : manga.pages.len().to_string(),
+                    "lastReadChapter": (manga.chapter + 1).to_string(),
+                    "totalChapters"  : manga.chapters.len().to_string(),
+                    "description"   : details.description.unwrap_or_default(),
+                }];
+
+                (17, Some(v.to_string()))
+            }
             Self::Error(s) => (1000, Some(s)),
             Self::BackendImage => (101, None),
         }
@@ -209,8 +210,9 @@ impl MyBackend {
                 println!("A frontend has connected");
             }
             RecvMessage::SearchManga(search_term) => {
-                let api = &self.api;
                 functionality.send_typed_message(SendMessage::status("starts downloading"))?;
+
+                let api = self.active.api.clone();
 
                 let body = api.search_by_id(&search_term).await?;
 
@@ -237,6 +239,7 @@ impl MyBackend {
                 functionality.send_typed_message(SendMessage::status("page list downloaded"))?;
 
                 let search = MangaReader {
+                    api,
                     pages: result,
                     page: 0,
                     chapters,
@@ -252,22 +255,23 @@ impl MyBackend {
                 let manga = &mut self.active;
                 manga.page += 1;
                 if manga.pages.len() == manga.page {
-                    manga.next_chapter(&self.api).await?;
+                    manga.next_chapter().await?;
                 }
             }
             RecvMessage::PrevPage => {
                 let manga = &mut self.active;
                 if manga.page == 0 {
-                    manga.prev_chapter(&self.api).await?;
+                    manga.prev_chapter().await?;
                 } else {
                     manga.page -= 1;
                 }
+                self.state = State::Reading { start: manga.page };
             }
             RecvMessage::PrevChapter => {
-                self.active.prev_chapter(&self.api).await?;
+                self.active.prev_chapter().await?;
             }
             RecvMessage::NextChapter => {
-                self.active.next_chapter(&self.api).await?;
+                self.active.next_chapter().await?;
             }
             RecvMessage::GetChapterList => {
                 let output = self
@@ -282,31 +286,31 @@ impl MyBackend {
             }
             RecvMessage::SelectChapter(index) => {
                 self.active.chapter = index;
-                self.active.update_chapter(&self.api).await?;
-                self.state = State::Reading;
+                self.active.update_chapter().await?;
+                self.state = State::Reading { start: 0 };
             }
             RecvMessage::SelectPage(index) => {
                 self.active.page = index;
-                self.state = State::Reading;
+                self.state = State::Reading { start: index };
             }
             RecvMessage::ConfirmMangaSearch => {
-                let State::Search { search: manga, .. } = &mut self.state else {
+                let State::Search { search: manga, .. } =
+                    std::mem::replace(&mut self.state, State::Reading { start: 0 })
+                else {
                     bail!("impossible state reached");
                 };
-                self.active = std::mem::take(manga);
-                self.state = State::Reading;
+                self.active = *manga;
             }
             RecvMessage::SelectBackend(supported_backend) => {
-                use SupportedBackends as SBC;
-                let is_different = matches!(
-                    (&self.api, &supported_backend),
-                    (SBC::NHentai(_), SBC::Manhuagui(_)) | (SBC::Manhuagui(_), SBC::NHentai(_))
-                );
+                let is_different = { dbg!(supported_backend.id()) != dbg!(self.active.api.id()) };
                 if is_different {
-                    self.api = supported_backend;
-                    self.active = MangaReader::default();
+                    let manga_reader = MangaReader {
+                        api: supported_backend.clone(),
+                        ..Default::default()
+                    };
+                    self.active = manga_reader;
                     if let State::Search { search: manga, .. } = &mut self.state {
-                        std::mem::take(manga);
+                        *manga = Box::new(self.active.clone());
                     }
                 }
             }
@@ -316,50 +320,52 @@ impl MyBackend {
                 }
                 exit(0);
             }
+            RecvMessage::SaveActiveToBookShelf => {
+                self.bookshelf.insert(self.active.clone()).await?;
+            }
+            RecvMessage::SelectBookFromBookShelf(key) => {
+                let manga = self
+                    .bookshelf
+                    .bookshelf()
+                    .get(&key)
+                    .context("somehow missing bookshelf stuff")?
+                    .clone();
+                let p = manga.page;
+                self.active = manga;
+                self.state = State::Reading { start: p };
+                // self.active.update_chapter().await?;
+                // self.active.page = p;
+                self.active.send_details(functionality)?;
+            }
+            RecvMessage::BookShelfView => {
+                self.state = State::Bookshelf;
+            }
         };
         self.react_to_state(functionality).await?;
         Ok(())
     }
 
-    async fn initiate_chapter_download(&self, functionality: BackendReplier) -> anyhow::Result<()> {
-        let mut handlers = self.handlers.lock().await;
-        let downloading_status = handlers.entry(self.active.chapter).or_insert(None);
-        let priority_page = if downloading_status
-            .as_ref()
-            .is_some_and(|x| !x.is_finished())
-        {
-            Some(self.active.page)
-        } else {
-            None
-        };
-        drop(handlers);
-
+    async fn initiate_chapter_download(
+        &self,
+        functionality: BackendReplier,
+        start: usize,
+    ) -> anyhow::Result<()> {
         let manga = Arc::new(self.active.clone());
 
-        functionality.send_typed_message(SendMessage::PageListChapter(manga.chapter + 1))?;
-
-        let api = self.api.clone();
         let chapter = manga.chapter;
-        let handle = tokio::spawn(async move {
-            if let Some(page) = priority_page {
-                let manga = manga.clone();
-                let api = api.clone();
-                manga.save_to_disk(&api, page).await?;
-                let path = manga.get_url_with_path(page)?.1;
-                functionality.send_typed_message(SendMessage::PageModify {
-                    chapter: manga.chapter + 1,
-                    page,
-                    path,
-                })?;
-                return Ok(());
-            }
+        let client = manga.api.client();
 
-            let mut iter = tokio_stream::iter(0..manga.pages.len())
+        functionality.send_typed_message(SendMessage::PageListChapter(chapter + 1))?;
+
+        let handle = tokio::spawn(async move {
+            let len = manga.pages.len();
+
+            let mut iter = tokio_stream::iter(start..len)
                 .map(|page| {
+                    let client = client.clone();
                     let manga = manga.clone();
-                    let api = api.clone();
                     tokio::spawn(async move {
-                        manga.save_to_disk(&api, page).await?;
+                        manga.save_to_disk(client, page).await?;
                         anyhow::Ok(page)
                     })
                 })
@@ -377,9 +383,10 @@ impl MyBackend {
             }
             anyhow::Ok(())
         });
-        if priority_page.is_none() {
-            self.handlers.lock().await.insert(chapter, Some(handle));
-        }
+        self.handlers
+            .lock()
+            .await
+            .insert((chapter, start), Some(handle));
         Ok(())
     }
 
@@ -389,15 +396,19 @@ impl MyBackend {
     ) -> Result<(), anyhow::Error> {
         match self.state {
             State::Idleing => {}
-            State::Reading => {
-                self.active.send_page_information(*functionality)?;
+            State::Reading { start } => {
+                self.active.send_page_information(functionality)?;
+
+                let chapter = self.active.chapter;
+
+                self.bookshelf.insert(self.active.clone()).await?;
 
                 for (_, v) in self
                     .handlers
                     .lock()
                     .await
                     .iter_mut()
-                    .filter(|(&k, _)| k != self.active.chapter)
+                    .filter(|(&(c, p), _)| c != chapter && p != start)
                 {
                     v.as_ref().unwrap().abort();
                     *v = None;
@@ -407,7 +418,8 @@ impl MyBackend {
 
                 functionality.send_typed_message(SendMessage::BackendImage)?;
 
-                self.initiate_chapter_download(*functionality).await?;
+                self.initiate_chapter_download(functionality.clone(), start)
+                    .await?;
             }
             State::ChapterList {
                 output: ref chapters,
@@ -416,41 +428,59 @@ impl MyBackend {
                 functionality.send_typed_message(SendMessage::ChapterList(chapters.to_string()))?;
             }
             State::Search {
-                ref mut search,
+                ref search,
                 confirm,
             } => {
                 if confirm {
-                    let manga = std::mem::take(search);
+                    let State::Search { search: manga, .. } =
+                        std::mem::replace(&mut self.state, State::Reading { start: 0 })
+                    else {
+                        bail!("impossible state reached");
+                    };
                     self.active = *manga;
-                    self.state = State::Reading;
+                    self.state = State::Reading { start: 0 };
                     Box::pin(self.react_to_state(functionality)).await?;
                     return Ok(());
                 }
-                search.send_details(*functionality)?;
-                search.send_page_information(*functionality)?;
-                search.save_to_disk(&self.api, 0).await?;
+                search.send_details(functionality)?;
+                search.send_page_information(functionality)?;
+                search
+                    .save_to_disk(self.active.api.client().clone(), 0)
+                    .await?;
                 functionality.send_typed_message(SendMessage::MangaPreview(
                     search.get_url_with_path(0)?.1,
                 ))?;
+            }
+            State::Bookshelf => {
+                for v in self.bookshelf.bookshelf().values() {
+                    functionality.send_typed_message(SendMessage::BookshelfMangaDetails(
+                        Box::new(v.clone()),
+                    ))?;
+                }
             }
         };
         Ok(())
     }
 }
 
+#[derive(Debug)]
 enum State {
     Idleing,
+    Bookshelf,
     ChapterList {
         output: String,
     },
-    Reading,
+    Reading {
+        start: usize,
+    },
     Search {
         search: Box<MangaReader>,
         confirm: bool,
     },
 }
-#[derive(Clone, Default, Debug)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct MangaReader {
+    api: Arc<Backend>,
     details: SManga,
     chapters: Vec<SChapter>,
     chapter: usize,
@@ -458,8 +488,21 @@ struct MangaReader {
     page: usize,
 }
 
+impl Default for MangaReader {
+    fn default() -> Self {
+        Self {
+            api: Arc::new(Manhuagui::new(Preferences::default()).unwrap()),
+            details: Default::default(),
+            chapters: Default::default(),
+            chapter: Default::default(),
+            pages: Default::default(),
+            page: Default::default(),
+        }
+    }
+}
+
 impl MangaReader {
-    pub fn send_details(&self, functionality: BackendReplier) -> anyhow::Result<()> {
+    pub fn send_details(&self, functionality: &BackendReplier) -> anyhow::Result<()> {
         if let Some(description) = self.details.description.clone() {
             functionality.send_typed_message(SendMessage::MangaDescription(description))?;
         }
@@ -472,7 +515,7 @@ impl MangaReader {
         functionality.send_typed_message(SendMessage::MangaName(self.details.title.clone()))?;
         Ok(())
     }
-    pub fn send_page_information(&self, functionality: BackendReplier) -> anyhow::Result<()> {
+    pub fn send_page_information(&self, functionality: &BackendReplier) -> anyhow::Result<()> {
         functionality.send_typed_message(SendMessage::ActivePageNumber(self.page + 1))?;
 
         functionality.send_typed_message(SendMessage::TotalPageSize(self.pages.len()))?;
@@ -480,15 +523,16 @@ impl MangaReader {
         functionality.send_typed_message(SendMessage::TotalChapterSize(self.chapters.len()))?;
         Ok(())
     }
-    pub async fn next_chapter(&mut self, api: Backend<'_>) -> anyhow::Result<()> {
+    pub async fn next_chapter(&mut self) -> anyhow::Result<()> {
         self.chapter += 1;
-        self.update_chapter(api).await
+        self.update_chapter().await
     }
-    pub async fn prev_chapter(&mut self, api: Backend<'_>) -> anyhow::Result<()> {
+    pub async fn prev_chapter(&mut self) -> anyhow::Result<()> {
         self.chapter -= 1;
-        self.update_chapter(api).await
+        self.update_chapter().await
     }
-    async fn update_chapter(&mut self, api: Backend<'_>) -> anyhow::Result<()> {
+    async fn update_chapter(&mut self) -> anyhow::Result<()> {
+        let api = &*self.api;
         let chpt = &self.chapters[self.chapter];
         let pages = api
             .fetch_pages(chpt)
@@ -500,7 +544,7 @@ impl MangaReader {
         self.page = 0;
         Ok(())
     }
-    pub async fn save_to_disk(&self, api: Backend<'_>, page: usize) -> anyhow::Result<()> {
+    pub async fn save_to_disk(&self, client: Client, page: usize) -> anyhow::Result<()> {
         if !PathBuf::from("/tmp/mangarr").exists() {
             create_dir("/tmp/mangarr/")?;
         }
@@ -511,7 +555,7 @@ impl MangaReader {
         let (url, ps) = self.get_url_with_path(page)?;
 
         if !ps.exists() {
-            let image = Self::save_page(url, api, &ps).await?;
+            let image = Self::save_page(url, client, &ps).await?;
             if let Some(image) = image {
                 self.generate_scaled_version(image, page).await?;
             }
@@ -551,13 +595,12 @@ impl MangaReader {
     }
     async fn save_page(
         url: &str,
-        api: Backend<'_>,
+        client: Client,
         path: impl AsRef<Path> + Send,
     ) -> anyhow::Result<Option<DynamicImage>> {
         let path = path.as_ref();
         if !path.exists() {
-            let bytes = api
-                .client()
+            let bytes = client
                 .get(url)
                 .send()
                 .await?
@@ -602,26 +645,19 @@ impl Default for State {
     }
 }
 
-impl Default for MyBackend {
-    fn default() -> Self {
-        Self {
-            api: SupportedBackends::Manhuagui(
-                Manhuagui::new(Preferences::default()).expect("invalid"),
-            ),
-            state: Default::default(),
-            active: Default::default(),
-            handlers: Default::default(),
-            // limit: Arc::new(Semaphore::new(10)),
-        }
-    }
-}
-
 #[async_trait]
 impl AppLoadBackend for MyBackend {
     async fn handle_message(&mut self, functionality: &BackendReplier, message: Message) {
         let v = self.handle_message(functionality, message);
 
         if let Err(err) = v.await {
+            let err = err
+                .chain()
+                .enumerate()
+                .map(|(i, x)| format!("{}:{x:#?}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n");
+            // panic!("{err:#?}");
             functionality
                 .send_typed_message(SendMessage::Error(format!("error: {err:#?}")))
                 .expect("can't send message");
