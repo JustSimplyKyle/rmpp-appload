@@ -14,6 +14,7 @@ Rectangle {
     property string activePage: "mangaReading"
     property string activeBackend: "Manhuagui"
     property var pages
+    property var bookshelf: ({})
     property int currPage
     property int totalPage
     property int currChpt
@@ -32,6 +33,7 @@ Rectangle {
 
     Component.onCompleted: {
         pages = new Map();
+        bookshelf = new Map();
     }
 
     // This is an endpoint. There can be multiple endpoints throughout one application
@@ -138,6 +140,22 @@ Rectangle {
                     break;
                 case 16:
                     dateDisplay.date = contents;
+                    break;
+                case 17:
+                    const array = JSON.parse(contents);
+                    const key = array.url;
+
+                    bookshelf.set(key, array);
+
+                    bookshelfModel.clear();
+
+
+                    for(let ke = 0;ke<bookshelf.size;ke++) {
+                        // console.log(key, Array.from(bookshelf.values())[ke].lastReadPage);
+                        bookshelfModel.set(ke, Array.from(bookshelf.values())[ke]);
+                    }
+
+                    bookshelfView.forceLayout();
                     break;
             }
         }
@@ -265,6 +283,7 @@ Rectangle {
                         anchors.fill: parent
                         onClicked: () => {
                             activePage = "chapterList"
+                            settings.visible = false;
                             appload.sendMessage(6, "")
                         }
                     }
@@ -282,6 +301,7 @@ Rectangle {
                         anchors.fill: parent
                         onClicked: () => {
                             activePage = "pageList"
+                            settings.visible = false;
                             pageList.row = currPage/4 - 1;
                             pageList.positionViewAtIndex(pageList.row*4, GridView.Beginning);
                         }
@@ -300,6 +320,7 @@ Rectangle {
                         anchors.fill: parent
                         onClicked: () => {
                             activePage = "mangaReading"
+                            settings.visible = false;
                             selectionFooter.visible = true
                             pages = new Map();
                             backendImage.source = ""
@@ -324,12 +345,49 @@ Rectangle {
                         anchors.fill: parent
                         onClicked: () => {
                             activePage = "backendSelection"
+                            settings.visible = false;
                             selectionFooter.visible = false
                         }
                     }
                     Text {
                         font.pointSize: 24
                         text: "Backend Selection"
+                    }
+                }
+                Rectangle {
+                    width: 300
+                    height: 45
+                    border.width: 2
+                    border.color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            settings.visible = false;
+                            appload.sendMessage(12, "");
+                        }
+                    }
+                    Text {
+                        font.pointSize: 24
+                        text: "Add to bookshelf"
+                    }
+                }
+                Rectangle {
+                    width: 300
+                    height: 45
+                    border.width: 2
+                    border.color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            appload.sendMessage(14, "");
+                            activePage = "bookshelfView"
+                            settings.visible = false;
+                            selectionFooter.visible = false
+                        }
+                    }
+                    Text {
+                        font.pointSize: 24
+                        text: "View Bookshelf"
                     }
                 }
             }
@@ -385,6 +443,150 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     onClicked: () => appload.sendMessage(2, "")
+                }
+            }
+        }
+
+        ListModel {
+            id: bookshelfModel
+        }
+        GridView {
+            id: bookshelfView
+            visible: activePage === "bookshelfView"
+            Layout.fillWidth: bookshelfView.visible ? true : false
+            Layout.fillHeight: bookshelfView.visible ? true: false
+            Layout.preferredHeight: bookshelfView.visible ? null : 0
+            cellWidth: view.width
+            cellHeight: view.height / 7
+            model: bookshelfModel
+            header: Rectangle {
+                width: view.width
+                height: 80
+                Text {
+                    anchors.centerIn: parent
+                    font.pointSize: 24
+                    text: "Bookshelf"
+                }
+            }
+
+            delegate: RowLayout {
+                width: bookshelfView.cellWidth
+                height: bookshelfView.cellHeight
+                spacing: -1
+                Rectangle {
+                    Layout.preferredWidth: 250
+                    Layout.preferredHeight: bookshelfView.cellHeight + 1
+                    border.width: 2
+                    border.color: "black"
+                    Text {
+                        anchors.centerIn: parent
+                        font.pointSize: 36
+                        text: index + 1
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            appload.sendMessage(13, `${backend}\n${url}`);
+                            activePage = "mangaReading"
+                            pages = new Map();
+                            backendImage.source = ""
+                            manga_id = "";
+                            totalChpt = 0;
+                        }
+                    }
+                }
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: bookshelfView.cellHeight + 1
+                    border.width: 2
+                    border.color: "black"
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: () => {
+                            appload.sendMessage(13, `${backend}\n${url}`);
+    
+                            activePage = "mangaReading"
+                            pages = new Map();
+                            backendImage.source = ""
+                            manga_id = "";
+                            totalChpt = 0;
+                        }
+                    }
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: -1
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 100
+                            border.width: 2
+                            border.color: "black"
+                            Text {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.leftMargin: 30
+                                font.pointSize: 36
+                                text: title
+                            }
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            border.width: 2
+                            border.color: "black"
+                            RowLayout {
+                                anchors.fill: parent
+                                spacing: -1
+                                Rectangle {
+                                    Layout.preferredWidth: 300
+                                    Layout.fillHeight: true
+                                    border.width: 2
+                                    border.color: "black"
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 30
+                                        Item {
+                                            Layout.alignment: Qt.AlignTop
+                                            Layout.topMargin: 40
+                                            Layout.fillWidth: true
+                                            Layout.fillHeight: true
+                                            Text {
+                                                text: `Page: ${lastReadPage}/${totalPages}`
+                                                font.pointSize: 24
+                                            }
+                                        }
+                                        Item {
+                                            Layout.alignment: Qt.AlignBottom
+                                            Layout.bottomMargin: 30
+                                            Layout.fillWidth: true
+                                            Layout.fillHeight: true
+                                            Text {
+                                                text: `Chapter: ${lastReadChapter}/${totalChapters}`
+                                                font.pointSize: 24
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    border.width: 2
+                                    border.color: "black"
+                                    clip: true
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.leftMargin: 30
+                                        anchors.topMargin: 20
+                                        anchors.bottomMargin: 20
+                                        wrapMode: Text.Wrap
+                                        font.pointSize: 20
+                                        text: description
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -736,7 +938,7 @@ Rectangle {
                                 Layout.fillHeight: true
                                 border.width: 2
                                 border.color: "black"
-                                Text {
+                                TextInput {
                                     anchors.left: parent.left
                                     anchors.right: parent.right
                                     anchors.verticalCenter: parent.verticalCenter
@@ -744,6 +946,10 @@ Rectangle {
                                     anchors.rightMargin: 20
                                     font.pointSize: 36
                                     text: manga_id
+                                    activeFocusOnPress: true
+                                    onAccepted: {
+                                        Qt.inputMethod.hide();
+                                    }
                                     Epaper.ScreenModeItem {
                                         anchors.fill: parent
                                         visible: true
@@ -873,7 +1079,7 @@ Rectangle {
 
         RowLayout {
             id: layout
-            visible: (!selectionFooter.visible) && activePage != "backendSelection"
+            visible: (!selectionFooter.visible) && activePage != "backendSelection" && activePage != "bookshelfView"
             Layout.fillWidth: true
             Layout.fillHeight: false
             Layout.preferredHeight: layout.visible ? 150 : 0

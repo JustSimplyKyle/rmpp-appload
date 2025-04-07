@@ -166,7 +166,7 @@ impl SendMessage {
                     "totalPages"     : manga.pages.len().to_string(),
                     "lastReadChapter": (manga.chapter + 1).to_string(),
                     "totalChapters"  : manga.chapters.len().to_string(),
-                    "description"   : details.description.unwrap_or_default(),
+                    "description"    : details.description.unwrap_or_default(),
                 }];
 
                 (17, Some(v.to_string()))
@@ -408,7 +408,7 @@ impl MyBackend {
                     .lock()
                     .await
                     .iter_mut()
-                    .filter(|(&(c, p), _)| c != chapter && p != start)
+                    .filter(|(&(c, p), _)| c != chapter || p != start)
                 {
                     v.as_ref().unwrap().abort();
                     *v = None;
