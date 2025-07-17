@@ -2,6 +2,7 @@ use std::{collections::HashMap, env, path::PathBuf};
 
 use backend::{MangaBackend, SManga};
 use serde::{Deserialize, Serialize};
+use smol::fs;
 
 use crate::MangaReader;
 
@@ -69,7 +70,7 @@ impl BookShelf {
         if let Some(path) = Self::path() {
             let result = self.0.iter().collect::<Vec<_>>();
             let contents = serde_json::to_string(&result)?;
-            tokio::fs::write(path, contents).await?;
+            fs::write(path, contents).await?;
         }
         Ok(())
     }

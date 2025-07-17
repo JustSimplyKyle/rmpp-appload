@@ -34,8 +34,8 @@ pub struct Page {
     pub image_url: String,
 }
 
-#[async_trait::async_trait]
 #[typetag::serde(tag = "type")]
+#[async_trait::async_trait]
 pub trait MangaBackend: std::fmt::Debug + Send + Sync + Display {
     async fn search_by_id(&self, id: &str) -> anyhow::Result<SManga>;
 

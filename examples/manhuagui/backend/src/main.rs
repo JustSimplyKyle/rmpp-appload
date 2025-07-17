@@ -3,6 +3,7 @@ mod bookshelf;
 use std::{
     collections::HashMap,
     fs::{create_dir, remove_dir_all},
+    future::Future,
     hash::{DefaultHasher, Hash, Hasher},
     io::Cursor,
     path::{Path, PathBuf},
@@ -11,7 +12,8 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use appload_client::{AppLoadBackend, BackendReplier, Message, MSG_SYSTEM_NEW_COORDINATOR};
+use appload_client::{AppLoadBackend, Message, MSG_SYSTEM_NEW_COORDINATOR};
+use async_compat::Compat;
 use async_trait::async_trait;
 use backend::{
     manhuagui::{Manhuagui, Preferences},
@@ -19,7 +21,7 @@ use backend::{
     MangaBackend, SChapter, SManga,
 };
 use bookshelf::{BookShelf, BookShelfKey};
-use futures_util::StreamExt;
+use futures::{stream, StreamExt};
 use image::{
     codecs::png::PngEncoder, imageops::FilterType, DynamicImage, GenericImageView, ImageReader,
     Rgba,
@@ -27,22 +29,30 @@ use image::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::{io::AsyncWriteExt, sync::Mutex, task::JoinHandle};
+use smol::{fs, future::block_on};
+use smol::{io::AsyncWriteExt, Task};
 
-#[tokio::main]
-async fn main() {
-    appload_client::AppLoad::new(&mut MyBackend::default())
-        .expect("backend failing to start. please cry")
-        .run()
-        .await
-        .expect("backend failing to start. please cry");
+type BackendReplier = appload_client::BackendReplier<MyBackend>;
+
+pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
+    smol::spawn(Compat::new(future))
+}
+
+fn main() {
+    block_on(Compat::new(async {
+        appload_client::AppLoad::new(MyBackend::default())
+            .expect("backend failing to start. please cry")
+            .run()
+            .await
+            .expect("backend failing to start. please cry");
+    }));
 }
 
 type Backend = dyn MangaBackend;
 #[derive(Default)]
 struct MyBackend {
-    //                          (chapter, page)
-    handlers: Arc<Mutex<HashMap<(usize, usize), Option<JoinHandle<anyhow::Result<()>>>>>>,
+    //                (chapter, page)
+    handlers: HashMap<(usize, usize), Option<Task<anyhow::Result<()>>>>,
     bookshelf: BookShelf,
     active: MangaReader,
     state: State,
@@ -340,31 +350,31 @@ impl MyBackend {
             RecvMessage::BookShelfView => {
                 self.state = State::Bookshelf;
             }
-        };
+        }
         self.react_to_state(functionality).await?;
         Ok(())
     }
 
-    async fn initiate_chapter_download(
-        &self,
+    fn initiate_chapter_download(
+        &mut self,
         functionality: BackendReplier,
         start: usize,
     ) -> anyhow::Result<()> {
-        let manga = Arc::new(self.active.clone());
+        let manga = self.active.clone();
 
         let chapter = manga.chapter;
         let client = manga.api.client();
 
         functionality.send_typed_message(SendMessage::PageListChapter(chapter + 1))?;
 
-        let handle = tokio::spawn(async move {
+        let handle = spawn(async move {
             let len = manga.pages.len();
 
-            let mut iter = tokio_stream::iter(start..len)
+            let mut iter = stream::iter(start..len)
                 .map(|page| {
                     let client = client.clone();
                     let manga = manga.clone();
-                    tokio::spawn(async move {
+                    spawn(async move {
                         manga.save_to_disk(client, page).await?;
                         anyhow::Ok(page)
                     })
@@ -372,7 +382,7 @@ impl MyBackend {
                 .buffered(3);
 
             while let Some(x) = iter.next().await {
-                let page = x??;
+                let page = x?;
 
                 let path = manga.get_url_with_path(page)?.1;
                 functionality.send_typed_message(SendMessage::PageModify {
@@ -383,10 +393,8 @@ impl MyBackend {
             }
             anyhow::Ok(())
         });
-        self.handlers
-            .lock()
-            .await
-            .insert((chapter, start), Some(handle));
+
+        self.handlers.insert((chapter, start), Some(handle));
         Ok(())
     }
 
@@ -405,21 +413,17 @@ impl MyBackend {
 
                 for (_, v) in self
                     .handlers
-                    .lock()
-                    .await
                     .iter_mut()
                     .filter(|(&(c, p), _)| c != chapter || p != start)
                 {
-                    v.as_ref().unwrap().abort();
-                    *v = None;
+                    v.take().unwrap().cancel().await;
                 }
 
-                self.handlers.lock().await.retain(|_, y| y.is_some());
+                self.handlers.retain(|_, y| y.is_some());
 
                 functionality.send_typed_message(SendMessage::BackendImage)?;
 
-                self.initiate_chapter_download(functionality.clone(), start)
-                    .await?;
+                self.initiate_chapter_download(functionality.clone(), start)?;
             }
             State::ChapterList {
                 output: ref chapters,
@@ -577,7 +581,7 @@ impl MangaReader {
 
             original_image.write_with_encoder(encoder)?;
 
-            tokio::fs::write(ps, buf).await?;
+            fs::write(ps, buf).await?;
         }
         Ok(())
     }
@@ -627,7 +631,7 @@ impl MangaReader {
             image.write_with_encoder(non_grayscale_encoder)?;
 
             if !path.exists() {
-                let mut file = tokio::fs::File::create_new(path).await?;
+                let mut file = fs::File::create(path).await?;
 
                 file.write_all(&non_grayscale).await?;
 

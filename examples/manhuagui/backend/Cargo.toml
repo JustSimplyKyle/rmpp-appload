@@ -6,18 +6,18 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.95"
 appload-client = { path = "../../../backend-clients/rust-backend" }
-async-trait = "0.1.83"
-chrono = "0.4.39"
-futures-util = "0.3.31"
+async-compat = "0.2.4"
+async-trait = "0.1.88"
+chrono = "0.4.41"
+futures = "0.3.31"
 image = "0.25.5"
 quick-js = "0.4.1"
 regex = "1.11.1"
-# reqwest = "0.12.12"
-reqwest = { version = "0.12.12", default-features = false, features = ["json", "stream", "rustls-tls", "cookies"] }
+reqwest = { version = "0.12.12", default-features = false, features = ["json", "rustls-tls", "cookies", "trust-dns"] }
 scraper = "0.22.0"
 serde =  { version = "1.0.217", features = ["derive", "rc"] }
 serde_json = "1.0.137"
-tokio = { version = "1.42.0", features = ["macros", "rt", "rt-multi-thread"] }
-tokio-stream = "0.1.17"
-typetag = "0.2.19"
+smol = "2.0.2"
+smol-macros = "0.1.1"
+typetag = "0.2.20"
 

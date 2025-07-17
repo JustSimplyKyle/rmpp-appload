@@ -4,7 +4,7 @@ import QtQuick.Layouts 1.3
 import net.asivery.AppLoad 1.0
 
 
-import xofm.libs.epaper as Epaper
+// import xofm.libs.epaper as Epaper
 
 Rectangle {
     anchors.fill: parent
@@ -950,11 +950,11 @@ Rectangle {
                                     onAccepted: {
                                         Qt.inputMethod.hide();
                                     }
-                                    Epaper.ScreenModeItem {
-                                        anchors.fill: parent
-                                        visible: true
-                                        mode: Epaper.ScreenModeItem.Animation
-                                    }
+                                    // Epaper.ScreenModeItem {
+                                    //     anchors.fill: parent
+                                    //     visible: true
+                                    //     mode: Epaper.ScreenModeItem.Animation
+                                    // }
                                 }
                             }
                             Rectangle {
