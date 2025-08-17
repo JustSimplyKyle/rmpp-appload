@@ -58,10 +58,9 @@ name = "appload-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-compat",
  "async-trait",
  "libc",
- "smol",
+ "tokio",
 ]
 
 [[package]]

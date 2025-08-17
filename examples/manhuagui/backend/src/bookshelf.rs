@@ -4,16 +4,11 @@ use backend::{MangaBackend, SManga};
 use serde::{Deserialize, Serialize};
 use smol::fs;
 
-use crate::MangaReader;
+use crate::manga_reader::MangaReader;
 
 #[derive(Clone)]
 pub struct BookShelf(HashMap<BookShelfKey, MangaReader>);
 
-impl Default for BookShelf {
-    fn default() -> Self {
-        Self::new().expect("can't read bookshelf config")
-    }
-}
 #[derive(Clone, Eq, Hash, PartialEq, Deserialize, Serialize, Debug, Default)]
 pub struct BookShelfKey {
     pub manga_url: String,
@@ -42,7 +37,7 @@ impl BookShelf {
         if let Some(path) = path.filter(|x| x.exists()) {
             let s = std::fs::read_to_string(&path)?;
             let x: Vec<(BookShelfKey, MangaReader)> = serde_json::from_str(&s)?;
-            let x = x.into_iter().collect();
+            let x = dbg!(x.into_iter().collect());
             Ok(Self(x))
         } else {
             Ok(Self(HashMap::new()))
@@ -75,9 +70,9 @@ impl BookShelf {
         Ok(())
     }
 
-    pub fn get(&self, manga: &MangaReader) -> Option<&MangaReader> {
+    pub fn get_mut(&mut self, manga: &MangaReader) -> Option<&mut MangaReader> {
         let key = BookShelfKey::from_manga(manga);
-        self.0.get(&key)
+        self.0.get_mut(&key)
     }
 
     pub const fn bookshelf(&self) -> &HashMap<BookShelfKey, MangaReader> {
