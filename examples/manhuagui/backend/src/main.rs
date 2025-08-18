@@ -161,10 +161,12 @@ impl MyBackend {
             RecvMessage::PrevChapter => {
                 self.manga.prev_chapter().await?;
                 self.bookshelf.insert(self.manga.clone()).await?;
+                self.clear_download_handles().await;
             }
             RecvMessage::NextChapter => {
                 self.manga.next_chapter().await?;
                 self.bookshelf.insert(self.manga.clone()).await?;
+                self.clear_download_handles().await;
             }
             RecvMessage::GetChapterList => {
                 self.state = State::ChapterList;
@@ -172,16 +174,13 @@ impl MyBackend {
             RecvMessage::SelectChapter(index) => {
                 self.manga.with_chapter_mut(|x| *x = index).await?;
                 self.bookshelf.insert(self.manga.clone()).await?;
+                self.clear_download_handles().await;
                 self.state = State::Reading;
             }
             RecvMessage::SelectPage(index) => {
                 self.manga.current_page.page = index;
 
-                for x in &mut self.handlers {
-                    x.abort();
-                }
-                self.handlers.clear();
-                self.manga.clear_download_managear().await;
+                self.clear_download_handles().await;
 
                 self.state = State::Reading;
             }
@@ -233,6 +232,14 @@ impl MyBackend {
         }
         self.react_to_state(functionality).await?;
         Ok(())
+    }
+
+    async fn clear_download_handles(&mut self) {
+        for x in &mut self.handlers {
+            x.abort();
+        }
+        self.handlers.clear();
+        self.manga.clear_download_managear().await;
     }
 
     async fn react_to_state(
