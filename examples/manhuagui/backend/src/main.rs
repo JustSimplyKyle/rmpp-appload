@@ -55,6 +55,8 @@ impl<T> Future for AbortableTask<T> {
 }
 
 fn main() {
+    unsafe { std::env::set_var("SMOL_THREADS", "4") };
+
     block_on(Compat::new(async {
         appload_client::AppLoad::new(MyBackend::new())
             .expect("backend failing to start. please cry")
@@ -78,7 +80,9 @@ macro_rules! init_functionality {
         let __functionality = $func;
         macro_rules! send_status {
             ($message:expr) => {
-                __functionality.send_typed_message(SendMessage::status($message))
+                __functionality
+                    .send_typed_message(SendMessage::status($message))
+                    .await
             };
         }
     };
@@ -224,7 +228,7 @@ impl MyBackend {
                 self.manga = manga;
                 self.state = State::Reading;
                 self.manga.update_chapter().await?;
-                self.manga.send_details(functionality)?;
+                self.manga.send_details(functionality).await?;
             }
             RecvMessage::BookShelfView => {
                 self.state = State::Bookshelf;
@@ -249,12 +253,13 @@ impl MyBackend {
         match self.state {
             State::Idleing => {}
             State::Reading => {
-                self.manga.send_page_information(functionality)?;
+                self.manga.send_page_information(functionality).await?;
 
                 self.bookshelf
                     .with_mut(
                         |manga| {
                             if let Some(bookshelf_manga) = manga {
+                                bookshelf_manga.pages.clone_from(&self.manga.pages);
                                 bookshelf_manga.current_page = self.manga.current_page;
                             }
                         },
@@ -270,7 +275,9 @@ impl MyBackend {
                     .prefetch_pages(self.manga.pages_len(), functionality);
                 self.handlers.push(handle);
 
-                functionality.send_typed_message(SendMessage::BackendImage)?;
+                functionality
+                    .send_typed_message(SendMessage::BackendImage)
+                    .await?;
             }
             State::ChapterList => {
                 let chapters = self
@@ -281,7 +288,9 @@ impl MyBackend {
                     .collect::<Vec<&str>>()
                     .join("\n");
 
-                functionality.send_typed_message(SendMessage::ChapterList(chapters))?;
+                functionality
+                    .send_typed_message(SendMessage::ChapterList(chapters))
+                    .await?;
             }
             State::Search {
                 ref search,
@@ -298,18 +307,20 @@ impl MyBackend {
                     Box::pin(self.react_to_state(functionality)).await?;
                     return Ok(());
                 }
-                search.send_details(functionality)?;
-                search.send_page_information(functionality)?;
+                search.send_details(functionality).await?;
+                search.send_page_information(functionality).await?;
                 search.save_to_disk(Page::default(), functionality).await?;
-                functionality.send_typed_message(SendMessage::MangaPreview(
-                    search.get_url_with_path(Page::default())?.1,
-                ))?;
+                functionality
+                    .send_typed_message(SendMessage::MangaPreview(
+                        search.get_url_with_path(Page::default())?.1,
+                    ))
+                    .await?;
             }
             State::Bookshelf => {
                 for v in self.bookshelf.bookshelf().values() {
-                    functionality.send_typed_message(SendMessage::BookshelfMangaDetails(
-                        Box::new(v.clone()),
-                    ))?;
+                    functionality
+                        .send_typed_message(SendMessage::BookshelfMangaDetails(Box::new(v.clone())))
+                        .await?;
                 }
             }
         }
@@ -350,6 +361,7 @@ impl AppLoadBackend for MyBackend {
             // panic!("{err:#?}");
             functionality
                 .send_typed_message(SendMessage::Error(format!("error: {err:#?}")))
+                .await
                 .expect("can't send message");
         }
     }

@@ -26,16 +26,18 @@ pub const MSG_SYSTEM_NEW_COORDINATOR: u32 = 0xFFFFFFFE;
 pub struct BackendReplier<T: AppLoadBackend + ?Sized> {
     fd: i32,
     locked: bool,
-    pub backend: Arc<Mutex<T>>
+    pub backend: Arc<Mutex<T>>,
+    send_mutex: Arc<Mutex<()>>,
 }
 
-impl <T: AppLoadBackend> BackendReplier<T> {
-    pub fn send_message(&self, msg_type: u32, contents: &str) -> Result<()> {
+impl<T: AppLoadBackend> BackendReplier<T> {
+    pub async fn send_message(&self, msg_type: u32, contents: &str) -> Result<()> {
         if self.locked {
             return Err(Error::msg(
                 "Cannot send back data to a terminating frontend",
             ));
         }
+        let _guard = self.send_mutex.lock().await;
         send_message(self.fd, msg_type, contents)
     }
 
@@ -54,17 +56,18 @@ pub struct AppLoad<T: AppLoadBackend> {
     fd: i32,
 }
 
-impl <T: AppLoadBackend> Clone for BackendReplier<T> {
+impl<T: AppLoadBackend> Clone for BackendReplier<T> {
     fn clone(&self) -> Self {
-        BackendReplier {
+        Self {
             locked: false,
             fd: self.fd,
-            backend: self.backend.clone()
+            backend: self.backend.clone(),
+            send_mutex: self.send_mutex.clone(),
         }
     }
 }
 
-impl <T: AppLoadBackend> AppLoad<T> {
+impl<T: AppLoadBackend> AppLoad<T> {
     pub fn new(backend: T) -> Result<Self> {
         let args: Vec<String> = args().collect();
         let fd = unsafe { socket(AF_UNIX, SOCK_SEQPACKET, 0) };
@@ -91,14 +94,18 @@ impl <T: AppLoadBackend> AppLoad<T> {
             return Err(Error::new(io::Error::last_os_error()));
         }
 
-        Ok(Self { backend: Arc::new(Mutex::new(backend)), fd })
+        Ok(Self {
+            backend: Arc::new(Mutex::new(backend)),
+            fd,
+        })
     }
 
     pub fn create_replier(&self) -> BackendReplier<T> {
         BackendReplier {
             locked: false,
             fd: self.fd,
-            backend: self.backend.clone()
+            backend: self.backend.clone(),
+            send_mutex: Arc::new(Mutex::new(())),
         }
     }
 
@@ -125,6 +132,8 @@ impl <T: AppLoadBackend> AppLoad<T> {
                 break;
             }
 
+            dbg!(header.length);
+
             if header.length as usize > MAX_PACKAGE_SIZE {
                 return Err(Error::msg("Message too exceeds protocol spec."));
             }
@@ -146,7 +155,9 @@ impl <T: AppLoadBackend> AppLoad<T> {
                 0 => String::new(),
                 len => String::from_utf8_lossy(&raw_buffer[0..len as usize]).into(),
             };
-            self.backend.lock().await
+            self.backend
+                .lock()
+                .await
                 .handle_message(
                     &replier,
                     Message {
@@ -158,7 +169,9 @@ impl <T: AppLoadBackend> AppLoad<T> {
         }
         replier.lock();
 
-        self.backend.lock().await
+        self.backend
+            .lock()
+            .await
             .handle_message(
                 &replier,
                 Message {
@@ -174,6 +187,7 @@ impl <T: AppLoadBackend> AppLoad<T> {
 
 fn send_message(fd: i32, msg_type: u32, data: &str) -> Result<()> {
     let byte_data = data.as_bytes();
+    dbg!(byte_data.len());
     let header = MessageHeader {
         length: byte_data.len() as u32,
         msg_type,

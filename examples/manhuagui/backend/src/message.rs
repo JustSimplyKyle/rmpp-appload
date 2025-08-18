@@ -147,17 +147,17 @@ impl SendMessage {
 }
 
 pub trait ReplierExt {
-    fn send_typed_message(&self, msg: SendMessage) -> anyhow::Result<()>;
+    async fn send_typed_message(&self, msg: SendMessage) -> anyhow::Result<()>;
 }
 
 impl ReplierExt for BackendReplier {
-    fn send_typed_message(&self, msg: SendMessage) -> anyhow::Result<()> {
+    async fn send_typed_message(&self, msg: SendMessage) -> anyhow::Result<()> {
         let (msg, contents) = msg.display();
         let mut contents = contents.as_ref().map_or("placeholder", |v| v);
         if contents.is_empty() {
             println!("empty content! adding placeholder text for protection");
             contents = "placeholder";
         }
-        self.send_message(msg, contents)
+        self.send_message(msg, contents).await
     }
 }

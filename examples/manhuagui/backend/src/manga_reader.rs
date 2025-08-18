@@ -100,28 +100,46 @@ impl MangaReader {
         };
         Ok(manga_reader)
     }
-    pub fn send_details(&self, functionality: &BackendReplier) -> anyhow::Result<()> {
+    pub async fn send_details(&self, functionality: &BackendReplier) -> anyhow::Result<()> {
         if let Some(description) = self.details.description.clone() {
-            functionality.send_typed_message(SendMessage::MangaDescription(description))?;
+            functionality
+                .send_typed_message(SendMessage::MangaDescription(description))
+                .await?;
         }
         if let Some(author) = self.details.author.clone() {
-            functionality.send_typed_message(SendMessage::MangaAuthor(author))?;
+            functionality
+                .send_typed_message(SendMessage::MangaAuthor(author))
+                .await?;
         }
-        functionality.send_typed_message(SendMessage::MangaLastUpdatedTime(
-            self.details.last_updated_time.clone(),
-        ))?;
-        functionality.send_typed_message(SendMessage::MangaName(self.details.title.clone()))?;
+        functionality
+            .send_typed_message(SendMessage::MangaLastUpdatedTime(
+                self.details.last_updated_time.clone(),
+            ))
+            .await?;
+        functionality
+            .send_typed_message(SendMessage::MangaName(self.details.title.clone()))
+            .await?;
         Ok(())
     }
-    pub fn send_page_information(&self, functionality: &BackendReplier) -> anyhow::Result<()> {
+    pub async fn send_page_information(
+        &self,
+        functionality: &BackendReplier,
+    ) -> anyhow::Result<()> {
         functionality
-            .send_typed_message(SendMessage::ActivePageNumber(self.current_page.page + 1))?;
+            .send_typed_message(SendMessage::ActivePageNumber(self.current_page.page + 1))
+            .await?;
 
-        functionality.send_typed_message(SendMessage::TotalPageSize(self.pages().len()))?;
-        functionality.send_typed_message(SendMessage::ActiveChapterNumber(
-            self.current_page.chapter + 1,
-        ))?;
-        functionality.send_typed_message(SendMessage::TotalChapterSize(self.chapters.len()))?;
+        functionality
+            .send_typed_message(SendMessage::TotalPageSize(self.pages().len()))
+            .await?;
+        functionality
+            .send_typed_message(SendMessage::ActiveChapterNumber(
+                self.current_page.chapter + 1,
+            ))
+            .await?;
+        functionality
+            .send_typed_message(SendMessage::TotalChapterSize(self.chapters.len()))
+            .await?;
         Ok(())
     }
     pub fn pages(&self) -> &[String] {
@@ -213,9 +231,11 @@ impl MangaReader {
         page: Page,
         functionality: &BackendReplier,
     ) -> anyhow::Result<()> {
-        functionality.send_typed_message(SendMessage::InitPagesForGivenChapter(
-            self.current_page.chapter + 1,
-        ))?;
+        functionality
+            .send_typed_message(SendMessage::InitPagesForGivenChapter(
+                self.current_page.chapter + 1,
+            ))
+            .await?;
 
         if !PathBuf::from("/tmp/mangarr").exists() {
             create_dir("/tmp/mangarr/").await?;
@@ -242,11 +262,13 @@ impl MangaReader {
         }
 
         if path.exists() && !part.exists() {
-            functionality.send_typed_message(SendMessage::PageModify {
-                chapter: self.current_page.chapter + 1,
-                page: page.page,
-                path,
-            })?;
+            functionality
+                .send_typed_message(SendMessage::PageModify {
+                    chapter: self.current_page.chapter + 1,
+                    page: page.page,
+                    path,
+                })
+                .await?;
         }
 
         Ok(())
