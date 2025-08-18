@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.95"
-appload-client = { path = "../../../backend-clients/rust-backend" }
+appload-client = { path = "../../../backends/appload-clients/rust-backend" }
 async-compat = "0.2.4"
 async-trait = "0.1.88"
 chrono = "0.4.41"

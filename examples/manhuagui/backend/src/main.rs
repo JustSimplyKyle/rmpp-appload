@@ -2,7 +2,7 @@ mod bookshelf;
 mod manga_reader;
 mod message;
 
-use std::{collections::HashMap, fs::remove_dir_all, future::Future, path::PathBuf, process::exit};
+use std::{fs::remove_dir_all, future::Future, path::PathBuf, pin::Pin, process::exit, task::Poll};
 
 use anyhow::{Context, bail};
 use appload_client::{AppLoadBackend, Message};
@@ -10,8 +10,7 @@ use async_compat::Compat;
 use async_trait::async_trait;
 use backend::MangaBackend;
 use bookshelf::BookShelf;
-use futures::{StreamExt, stream};
-use smol::Task;
+use futures::stream::{AbortHandle, Abortable, Aborted};
 use smol::future::block_on;
 
 use crate::{
@@ -21,8 +20,38 @@ use crate::{
 
 type BackendReplier = appload_client::BackendReplier<MyBackend>;
 
-pub fn spawn<T: Send + 'static>(future: impl Future<Output = T> + Send + 'static) -> Task<T> {
-    smol::spawn(Compat::new(future))
+pub fn spawn<T: Send + 'static>(
+    future: impl Future<Output = T> + Send + 'static,
+) -> AbortableTask<T> {
+    AbortableTask::spawn(Compat::new(future))
+}
+
+pub struct AbortableTask<T> {
+    handle: AbortHandle,
+    task: smol::Task<Result<T, Aborted>>,
+}
+
+impl<T: Send + 'static> AbortableTask<T> {
+    pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Self {
+        let (handle, reg) = AbortHandle::new_pair();
+        let abortable = Abortable::new(future, reg);
+        let task = smol::spawn(abortable);
+
+        Self { handle, task }
+    }
+
+    pub fn abort(&self) {
+        self.handle.abort();
+    }
+}
+
+impl<T> Future for AbortableTask<T> {
+    type Output = Result<T, Aborted>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        Pin::new(&mut this.task).poll(cx)
+    }
 }
 
 fn main() {
@@ -40,7 +69,7 @@ type Backend = dyn MangaBackend;
 struct MyBackend {
     bookshelf: BookShelf,
     manga: MangaReader,
-    handler: Option<Task<()>>,
+    handlers: Vec<AbortableTask<(usize, usize)>>,
     state: State,
 }
 
@@ -60,7 +89,7 @@ impl MyBackend {
             bookshelf: BookShelf::new().unwrap(),
             manga: MangaReader::new(None, None).unwrap(),
             state: State::default(),
-            handler: None,
+            handlers: Vec::new(),
         }
     }
     #[allow(clippy::too_many_lines)]
@@ -115,39 +144,44 @@ impl MyBackend {
             }
             RecvMessage::NextPage => {
                 let manga = &mut self.manga;
-                manga.active.page += 1;
-                if manga.pages_len() == manga.active.page {
+                manga.current_page.page += 1;
+                if manga.pages_len() == manga.current_page.page {
                     manga.next_chapter().await?;
                 }
             }
             RecvMessage::PrevPage => {
                 let manga = &mut self.manga;
-                if manga.active.page == 0 {
+                if manga.current_page.page == 0 {
                     manga.prev_chapter().await?;
                 } else {
-                    manga.active.page -= 1;
+                    manga.current_page.page -= 1;
                 }
-                self.state = State::Reading {};
+                self.state = State::Reading;
             }
             RecvMessage::PrevChapter => {
                 self.manga.prev_chapter().await?;
+                self.bookshelf.insert(self.manga.clone()).await?;
             }
             RecvMessage::NextChapter => {
                 self.manga.next_chapter().await?;
+                self.bookshelf.insert(self.manga.clone()).await?;
             }
             RecvMessage::GetChapterList => {
                 self.state = State::ChapterList;
             }
             RecvMessage::SelectChapter(index) => {
-                self.manga.active.chapter = index;
-                self.manga.update_chapter().await?;
+                self.manga.with_chapter_mut(|x| *x = index).await?;
+                self.bookshelf.insert(self.manga.clone()).await?;
                 self.state = State::Reading;
             }
             RecvMessage::SelectPage(index) => {
-                self.manga.active.page = index;
-                if let Some(x) = self.handler.take() {
-                    x.cancel().await;
+                self.manga.current_page.page = index;
+
+                for x in &mut self.handlers {
+                    x.abort();
                 }
+                self.handlers.clear();
+                self.manga.clear_download_managear().await;
 
                 self.state = State::Reading;
             }
@@ -189,11 +223,6 @@ impl MyBackend {
                     .context("somehow missing bookshelf stuff")?
                     .clone();
                 self.manga = manga;
-                // let p = manga.page;
-                // for task in self.handlers.values_mut() {
-                //     task.take().unwrap().cancel().await;
-                // }
-                // self.handlers.clear();
                 self.state = State::Reading;
                 self.manga.update_chapter().await?;
                 self.manga.send_details(functionality)?;
@@ -206,49 +235,6 @@ impl MyBackend {
         Ok(())
     }
 
-    fn initiate_chapter_download(
-        &mut self,
-        functionality: BackendReplier,
-        start: usize,
-    ) -> anyhow::Result<()> {
-        // let manga = self.manga.clone();
-
-        // let chapter = manga.chapter;
-        // let client = manga.api.client();
-
-        // let handle = spawn(async move {
-        //     let len = manga.pages.len();
-
-        //     let mut iter = stream::iter(start..len)
-        //         .map(|page| {
-        //             let client = client.clone();
-        //             let manga = manga.clone();
-        //             spawn(async move {
-        //                 manga.save_to_disk(client, page).await?;
-        //                 anyhow::Ok(page)
-        //             })
-        //         })
-        //         .buffered(3);
-
-        //     while let Some(x) = iter.next().await {
-        //         let page = x?;
-
-        //         let path = manga.get_url_with_path(page)?.1;
-        //         functionality.send_typed_message(SendMessage::PageModify {
-        //             chapter: manga.chapter + 1,
-        //             page,
-        //             path,
-        //         })?;
-        //     }
-        //     anyhow::Ok(())
-        // });
-
-        // self.handlers
-        //     .entry((chapter, start))
-        //     .or_insert(Some(handle));
-        Ok(())
-    }
-
     async fn react_to_state(
         &mut self,
         functionality: &BackendReplier,
@@ -258,16 +244,24 @@ impl MyBackend {
             State::Reading => {
                 self.manga.send_page_information(functionality)?;
 
-                if let Some(bookshelf_manga) = self.bookshelf.get_mut(&self.manga) {
-                    bookshelf_manga.active = self.manga.active;
-                }
+                self.bookshelf
+                    .with_mut(
+                        |manga| {
+                            if let Some(bookshelf_manga) = manga {
+                                bookshelf_manga.current_page = self.manga.current_page;
+                            }
+                        },
+                        &self.manga,
+                    )
+                    .await?;
 
                 self.manga
-                    .save_to_disk(self.manga.active, functionality)
+                    .save_to_disk(self.manga.current_page, functionality)
                     .await?;
-                self.manga
-                    .prefetch(self.manga.pages_len(), functionality)
-                    .detach();
+                let handle = self
+                    .manga
+                    .prefetch_pages(self.manga.pages_len(), functionality);
+                self.handlers.push(handle);
 
                 functionality.send_typed_message(SendMessage::BackendImage)?;
             }

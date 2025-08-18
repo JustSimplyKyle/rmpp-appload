@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
     io::Cursor,
     path::{Path, PathBuf},
@@ -11,13 +11,13 @@ use backend::{
     SChapter, SManga,
     manhuagui::{Manhuagui, Preferences},
 };
-use futures::{StreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 use image::{
     DynamicImage, GenericImageView, ImageReader, Rgba, codecs::png::PngEncoder,
     imageops::FilterType,
 };
 use reqwest::Client;
-use serde::{Deserialize, Serialize, ser::SerializeMap};
+use serde::{Deserialize, Serialize};
 use smol::{
     Task,
     fs::{self, File, create_dir},
@@ -26,7 +26,7 @@ use smol::{
 };
 
 use crate::{
-    Backend, BackendReplier,
+    AbortableTask, Backend, BackendReplier,
     message::{ReplierExt, SendMessage},
     spawn,
 };
@@ -36,43 +36,14 @@ pub struct MangaReader {
     pub api: Arc<Backend>,
     pub details: SManga,
     pub chapters: Vec<SChapter>,
-    pub pages: Vec<String>,
-    pub active: Page,
-    // #[serde(serialize_with = "serialize_download_manager")]
+    pub pages: HashMap<usize, Vec<String>>,
+    pub current_page: Page,
     #[serde(skip)]
-    download_manager: DownloadManager,
-}
-
-// use serde::Serializer; // 1.0.104
-// fn serialize_download_manager<S>(dm: &DownloadManager, serializer: S) -> Result<S::Ok, S::Error>
-// where
-//     S: Serializer,
-// {
-//     // Create a temporary map with transformed values
-//     let mut map = serializer.serialize_map(Some(dm.0.len()))?;
-
-//     for (key, status_arc) in &dm.0 {
-//         let status = status_arc.read().unwrap();
-//         let serialized_status = if status.is_downloading() {
-//             Status::Unfinished
-//         } else {
-//             status.clone()
-//         };
-//         map.serialize_entry(key, &serialized_status)?;
-//     }
-
-//     map.end()
-// }
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub enum Status {
-    Idle,
-    Downloading,
-    Finished,
+    download_manager: Arc<RwLock<DownloadManager>>,
 }
 
 #[derive(Debug, Clone, Default)]
-struct DownloadManager(HashMap<Page, Arc<RwLock<Status>>>);
+struct DownloadManager(HashSet<Page>);
 
 impl std::ops::DerefMut for DownloadManager {
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -81,52 +52,22 @@ impl std::ops::DerefMut for DownloadManager {
 }
 
 impl std::ops::Deref for DownloadManager {
-    type Target = HashMap<Page, Arc<RwLock<Status>>>;
+    type Target = HashSet<Page>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl DownloadManager {
-    pub fn from_pages(chapter: usize, len: usize) -> Self {
-        DownloadManager(
-            (0..len)
-                .map(|page| (Page { chapter, page }, Arc::new(RwLock::new(Status::Idle))))
-                .collect::<HashMap<_, _>>(),
-        )
-    }
-}
-
-impl Status {
-    /// Returns `true` if the status is [`Idle`].
-    ///
-    /// [`Idle`]: Status::Idle
-    #[must_use]
-    pub const fn is_idle(&self) -> bool {
-        matches!(self, Self::Idle)
-    }
-
-    /// Returns `true` if the status is [`Downloading`].
-    ///
-    /// [`Downloading`]: Status::Downloading
-    #[must_use]
-    pub const fn is_downloading(&self) -> bool {
-        matches!(self, Self::Downloading)
-    }
-
-    /// Returns `true` if the status is [`Finished`].
-    ///
-    /// [`Finished`]: Status::Finished
-    #[must_use]
-    pub const fn is_finished(&self) -> bool {
-        matches!(self, Self::Finished)
-    }
-}
 #[derive(Debug, Clone, Deserialize, Serialize, Default, Copy, PartialEq, Eq, Hash)]
 pub struct Page {
-    pub chapter: usize,
     pub page: usize,
+    chapter: usize,
+}
+impl Page {
+    pub const fn chapter(&self) -> usize {
+        self.chapter
+    }
 }
 
 impl MangaReader {
@@ -139,15 +80,13 @@ impl MangaReader {
             None => Arc::new(Manhuagui::new(Preferences::default())?),
         };
         let manga_reader = if let Some((details, chapters, pages, active)) = params.into() {
-            let pages_len = pages.len();
-            let chapter = active.chapter;
             Self {
                 api,
                 details,
                 chapters,
-                pages,
-                active,
-                download_manager: dbg!(DownloadManager::from_pages(chapter, pages_len)),
+                pages: HashMap::from([(0, pages)]),
+                current_page: active,
+                download_manager: RwLock::new(DownloadManager::default()).into(),
             }
         } else {
             Self {
@@ -155,8 +94,8 @@ impl MangaReader {
                 details: Default::default(),
                 chapters: Default::default(),
                 pages: Default::default(),
-                active: Default::default(),
-                download_manager: DownloadManager::default(),
+                current_page: Default::default(),
+                download_manager: RwLock::new(DownloadManager::default()).into(),
             }
         };
         Ok(manga_reader)
@@ -175,17 +114,24 @@ impl MangaReader {
         Ok(())
     }
     pub fn send_page_information(&self, functionality: &BackendReplier) -> anyhow::Result<()> {
-        functionality.send_typed_message(SendMessage::ActivePageNumber(self.active.page + 1))?;
-
-        functionality.send_typed_message(SendMessage::TotalPageSize(self.pages.len()))?;
         functionality
-            .send_typed_message(SendMessage::ActiveChapterNumber(self.active.chapter + 1))?;
+            .send_typed_message(SendMessage::ActivePageNumber(self.current_page.page + 1))?;
+
+        functionality.send_typed_message(SendMessage::TotalPageSize(self.pages().len()))?;
+        functionality.send_typed_message(SendMessage::ActiveChapterNumber(
+            self.current_page.chapter + 1,
+        ))?;
         functionality.send_typed_message(SendMessage::TotalChapterSize(self.chapters.len()))?;
         Ok(())
     }
+    pub fn pages(&self) -> &[String] {
+        &self.pages[&self.current_page.chapter]
+    }
     pub async fn with_chapter_mut(&mut self, f: impl Fn(&mut usize)) -> anyhow::Result<()> {
-        f(&mut self.active.chapter);
-        self.update_chapter().await
+        f(&mut self.current_page.chapter);
+        self.update_chapter().await?;
+        self.current_page.page = 0;
+        Ok(())
     }
     pub async fn next_chapter(&mut self) -> anyhow::Result<()> {
         self.with_chapter_mut(|x| *x += 1).await
@@ -193,30 +139,39 @@ impl MangaReader {
     pub async fn prev_chapter(&mut self) -> anyhow::Result<()> {
         self.with_chapter_mut(|x| *x -= 1).await
     }
-    pub const fn pages_len(&self) -> usize {
-        self.pages.len()
+    pub fn pages_len(&self) -> usize {
+        self.pages().len()
     }
     pub async fn update_chapter(&mut self) -> anyhow::Result<()> {
-        let api = &*self.api;
-        let chapter = &self.chapters[self.active.chapter];
-        let pages = api
-            .fetch_pages(chapter)
+        if !self.pages.contains_key(&self.current_page.chapter) {
+            let pages = self.download_pages_url(self.current_page.chapter).await?;
+            self.pages.insert(self.current_page.chapter, pages);
+        }
+        Ok(())
+    }
+
+    async fn download_pages_url(&self, chapter: usize) -> Result<Vec<String>, anyhow::Error> {
+        let s_chapter = &self.chapters[chapter];
+        let pages = self
+            .api
+            .fetch_pages(s_chapter)
             .await?
             .into_iter()
             .map(|x| x.image_url)
             .collect::<Vec<_>>();
-        self.pages = pages;
-        self.active.page = 0;
-        self.download_manager = DownloadManager::from_pages(self.active.chapter, self.pages.len());
-        Ok(())
+        Ok(pages)
     }
 
-    pub fn prefetch(&self, amount: usize, functionality: &BackendReplier) -> Task<(usize, usize)> {
-        let current = self.active.page;
+    pub fn prefetch_pages(
+        &self,
+        amount: usize,
+        functionality: &BackendReplier,
+    ) -> AbortableTask<(usize, usize)> {
+        let current = self.current_page.page;
         let manga = self.clone();
         let functionality = functionality.clone();
         let pages_len = self.pages_len();
-        let current_chapter = self.active.chapter;
+        let current_chapter = self.current_page.chapter;
         spawn(async move {
             let target = if current + amount >= pages_len {
                 pages_len - 1
@@ -249,6 +204,9 @@ impl MangaReader {
             (current, target)
         })
     }
+    pub async fn clear_download_managear(&self) {
+        self.download_manager.write().await.clear();
+    }
 
     pub async fn save_to_disk(
         &self,
@@ -256,7 +214,7 @@ impl MangaReader {
         functionality: &BackendReplier,
     ) -> anyhow::Result<()> {
         functionality.send_typed_message(SendMessage::InitPagesForGivenChapter(
-            self.active.chapter + 1,
+            self.current_page.chapter + 1,
         ))?;
 
         if !PathBuf::from("/tmp/mangarr").exists() {
@@ -268,27 +226,27 @@ impl MangaReader {
 
         let (url, path, part) = self.get_url_with_path(page)?;
 
-        if let Some(status) = self.download_manager.get(&page) {
-            if status.read().await.is_idle() && (part.exists() || !path.exists()) {
-                println!("attempt downloading page {page:#?}");
-                File::create(dbg!(&part)).await?;
+        if !self.download_manager.read().await.contains(&page) && (part.exists() || !path.exists())
+        {
+            println!("attempt downloading page {page:#?}");
+            File::create(&part).await?;
 
-                *status.write().await = Status::Downloading;
+            self.download_manager.write().await.insert(page);
 
-                let image = Self::save_page(url, self.api.client(), &path).await?;
-                self.generate_scaled_version(image, page).await?;
+            let image = Self::save_page(url, self.api.client(), &path).await?;
+            self.generate_scaled_version(image, page).await?;
 
-                *status.write().await = Status::Finished;
-                fs::remove_file(&part).await?;
-            }
+            self.download_manager.write().await.remove(&page);
 
-            if path.exists() && !status.read().await.is_downloading() && !part.exists() {
-                functionality.send_typed_message(SendMessage::PageModify {
-                    chapter: self.active.chapter + 1,
-                    page: page.page,
-                    path,
-                })?;
-            }
+            fs::remove_file(&part).await?;
+        }
+
+        if path.exists() && !part.exists() {
+            functionality.send_typed_message(SendMessage::PageModify {
+                chapter: self.current_page.chapter + 1,
+                page: page.page,
+                path,
+            })?;
         }
 
         Ok(())
@@ -314,7 +272,7 @@ impl MangaReader {
     }
 
     pub fn get_url_with_path(&self, page: Page) -> anyhow::Result<(&str, PathBuf, PathBuf)> {
-        let Some(url) = self.pages.get(page.page) else {
+        let Some(url) = self.pages().get(page.page) else {
             bail!("out of bounds");
         };
 

@@ -45,7 +45,6 @@ impl BookShelf {
     }
 
     fn path() -> Option<PathBuf> {
-        #[allow(deprecated)]
         let home = env::home_dir()?;
 
         if !home.join(".config/mangarr").exists() {
@@ -70,9 +69,14 @@ impl BookShelf {
         Ok(())
     }
 
-    pub fn get_mut(&mut self, manga: &MangaReader) -> Option<&mut MangaReader> {
+    pub async fn with_mut(
+        &mut self,
+        f: impl FnOnce(Option<&mut MangaReader>),
+        manga: &MangaReader,
+    ) -> anyhow::Result<()> {
         let key = BookShelfKey::from_manga(manga);
-        self.0.get_mut(&key)
+        f(self.0.get_mut(&key));
+        self.save().await
     }
 
     pub const fn bookshelf(&self) -> &HashMap<BookShelfKey, MangaReader> {

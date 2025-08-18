@@ -2,11 +2,11 @@ use std::fmt::Display;
 
 /// This code is based on the Manhuagui extension for Tachiyomi.
 /// Source: <https://github.com/keiyoushi/extensions-source/blob/main/src/zh/manhuagui/src/eu/kanade/tachiyomi/extension/zh/manhuagui/Manhuagui.ktb>
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use regex::Regex;
 use reqwest::{
-    header::{HeaderMap, HeaderValue, REFERER, USER_AGENT},
     Client,
+    header::{HeaderMap, HeaderValue, REFERER, USER_AGENT},
 };
 use scraper::Html;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -162,15 +162,15 @@ impl MangaBackend for Manhuagui {
                         date_upload: None,
                     };
 
-                    if let Some(ref latest_href) = latest_chapter_href {
-                        if current_chapter.url == *latest_href {
-                            let date_selector = Selector::parse(
-                                "div.book-detail > ul.detail-list > li.status > span > span.red",
-                            );
-                            if let Some(date_element) = document.select(&date_selector).last() {
-                                current_chapter.date_upload =
-                                    Some(Self::parse_date(date_element.text().next().unwrap()));
-                            }
+                    if let Some(ref latest_href) = latest_chapter_href
+                        && current_chapter.url == *latest_href
+                    {
+                        let date_selector = Selector::parse(
+                            "div.book-detail > ul.detail-list > li.status > span > span.red",
+                        );
+                        if let Some(date_element) = document.select(&date_selector).next_back() {
+                            current_chapter.date_upload =
+                                Some(Self::parse_date(date_element.text().next().unwrap()));
                         }
                     }
                     chapters.push(current_chapter);

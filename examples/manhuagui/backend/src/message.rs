@@ -122,14 +122,15 @@ impl SendMessage {
             Self::MangaName(s) => (15, Some(s)),
             Self::MangaLastUpdatedTime(s) => (16, Some(s)),
             Self::BookshelfMangaDetails(manga) => {
+                let total_pages = manga.pages().len();
                 let details = manga.details;
                 let v = json![{
                     "url"            : details.url,
                     "title"          : details.title,
                     "backend"        : manga.api.to_string(),
-                    "lastReadPage"   : (manga.active.page + 1).to_string(),
-                    "totalPages"     : manga.pages.len().to_string(),
-                    "lastReadChapter": (manga.active.chapter + 1).to_string(),
+                    "lastReadPage"   : (manga.current_page.page + 1).to_string(),
+                    "totalPages"     : total_pages.to_string(),
+                    "lastReadChapter": (manga.current_page.chapter() + 1).to_string(),
                     "totalChapters"  : manga.chapters.len().to_string(),
                     "description"    : details.description.unwrap_or_default(),
                 }];
