@@ -216,8 +216,12 @@ impl MangaReader {
                 .collect::<Vec<_>>()
                 .await;
 
+            // reason: we only discard the `Aborted` case of error
+            #[allow(clippy::manual_flatten)]
             for x in results {
-                x.unwrap();
+                if let Ok(x) = x {
+                    x.expect("manga download issue");
+                }
             }
             (current, target)
         })

@@ -1,7 +1,6 @@
 **/*.qmd-pure
 **/*/target
 **/output-rmpp
-backend-clients/rust-backend/target
 examples/manhuagui/backend/target
 examples/manhuagui/output
 examples/manhuagui/output-rmpp
