@@ -37,7 +37,7 @@ impl BookShelf {
         if let Some(path) = path.filter(|x| x.exists()) {
             let s = std::fs::read_to_string(&path)?;
             let x: Vec<(BookShelfKey, MangaReader)> = serde_json::from_str(&s)?;
-            let x = dbg!(x.into_iter().collect());
+            let x = x.into_iter().collect();
             Ok(Self(x))
         } else {
             Ok(Self(HashMap::new()))
