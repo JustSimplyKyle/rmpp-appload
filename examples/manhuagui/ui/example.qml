@@ -3,8 +3,8 @@ import QtQuick.Controls 2.5
 import QtQuick.Layouts 1.3
 import net.asivery.AppLoad 1.0
 
+//import xofm.libs.epaper as Epaper
 
-// import xofm.libs.epaper as Epaper
 
 Rectangle {
     anchors.fill: parent
@@ -21,15 +21,39 @@ Rectangle {
     property int totalChpt
 
     Rectangle {
+        z: 100000
+        anchors.top: view.top
+        anchors.left: view.left
+        border.width: 2
+        border.color: "red"
+        width: 100
+        height: 100
+        MouseArea {
+            anchors.fill: parent
+            onClicked: () => { appload.sendMessage(99, "") }
+        }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 20
+            fillMode: Image.PreserveAspectFit
+            source: "https://cdn-icons-png.flaticon.com/512/75/75519.png"
+        }
+    }
+
+    Rectangle {
         anchors.fill: parent
         visible: error.text === "" ? false : true
         z: 1000
         Text {
             id: error
             text: ""
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            width: parent.width
             font.pointSize: 36
         }
     }
+
 
     Component.onCompleted: {
         pages = new Map();
@@ -220,25 +244,6 @@ Rectangle {
                     popup.close();
                 }
             }
-        }
-    }
-    Rectangle {
-        z: 1
-        anchors.top: view.top
-        anchors.left: view.left
-        border.width: 2
-        border.color: "red"
-        width: 100
-        height: 100
-        MouseArea {
-            anchors.fill: parent
-            onClicked: () => { appload.sendMessage(99, "") }
-        }
-        Image {
-            anchors.fill: parent
-            anchors.margins: 20
-            fillMode: Image.PreserveAspectFit
-            source: "https://cdn-icons-png.flaticon.com/512/75/75519.png"
         }
     }
 
@@ -672,6 +677,11 @@ Rectangle {
             cellWidth: view.width
             cellHeight: 100
             model: 0
+
+            clip: true
+            interactive: false
+            highlightMoveDuration: 0
+
             header: Rectangle {
                 width: view.width
                 height: 80
@@ -679,6 +689,52 @@ Rectangle {
                     anchors.centerIn: parent
                     font.pointSize: 24
                     text: "Chapter Selection"
+                }
+            }
+
+            property int row: 0
+
+            function scrollDownOneRow() {
+                let diff = chapterList.model - chapterList.row;
+                console.log(diff);
+                if(0 <= diff && diff < 19) {
+                    // chapterList.row+=diff;
+                } else {
+                    chapterList.row+=5;
+                }
+                chapterList.positionViewAtIndex(chapterList.row, GridView.Beginning);
+            }
+            function scrollUpOneRow() {
+                if(0 <= chapterList.row && chapterList.row <= 5) {
+                    chapterList.row=0;
+                } else {
+                    chapterList.row-=5;
+                }
+                chapterList.positionViewAtIndex(chapterList.row, GridView.Beginning);
+            }
+
+            SwipeDetection {
+                id: chapterlistScroll
+                anchors.fill: parent
+                onChanged: () => {
+                    if(chapterlistScroll.swipeUp) {
+                        downstuff.visible = true;
+                        upstuff.visible = false;
+                    } else if (chapterlistScroll.swipeDown) {
+                        upstuff.visible = true;
+                        downstuff.visible = false;
+                    }
+                }
+                onReleased: () => {
+                    if(chapterlistScroll.swipeUp) {
+                        console.log("upupup");
+                        chapterList.scrollDownOneRow();
+                    } else if (chapterlistScroll.swipeDown) {
+                        console.log("downdowndown");
+                        chapterList.scrollUpOneRow();
+                    }
+                    downstuff.visible = false;
+                    upstuff.visible = false;
                 }
             }
 
@@ -770,10 +826,10 @@ Rectangle {
                 }
                 onReleased: () => {
                     if(listScroll.swipeUp) {
-                        console.log("upupup");
+                        console.log("upupupt stestensten");
                         pageList.scrollDownOneRow();
                     } else if (listScroll.swipeDown) {
-                        console.log("downdowndown");
+                        console.log("downdowndown stestee");
                         pageList.scrollUpOneRow();
                     }
                     downstuff.visible = false;
@@ -950,11 +1006,11 @@ Rectangle {
                                     onAccepted: {
                                         Qt.inputMethod.hide();
                                     }
-                                    // Epaper.ScreenModeItem {
-                                    //     anchors.fill: parent
-                                    //     visible: true
-                                    //     mode: Epaper.ScreenModeItem.Animation
-                                    // }
+                                   // Epaper.ScreenModeItem {
+                                   //     anchors.fill: parent
+                                   //     visible: true
+                                   //     mode: Epaper.ScreenModeItem.Animation
+                                   // }
                                 }
                             }
                             Rectangle {

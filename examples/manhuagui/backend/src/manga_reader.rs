@@ -12,9 +12,15 @@ use backend::{
     manhuagui::{Manhuagui, Preferences},
 };
 use futures::{StreamExt, TryStreamExt, stream};
-use image::{
-    DynamicImage, GenericImageView, ImageReader, Rgba, codecs::png::PngEncoder,
-    imageops::FilterType,
+use palette::{Clamp, IntoColor, Oklch, Srgb, encoding::srgb};
+use photon_rs::{
+    PhotonImage, Rgb, Rgba,
+    colour_spaces::{saturate_hsluv, saturate_hsv, saturate_lch},
+    effects,
+    helpers::save_dyn_image,
+    monochrome,
+    native::{open_image_from_bytes, save_image},
+    transform::{SamplingFilter, resize},
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -252,13 +258,12 @@ impl MangaReader {
 
         if !self.download_manager.read().await.contains(&page) && (part.exists() || !path.exists())
         {
-            println!("attempt downloading page {page:#?}");
             File::create(&part).await?;
 
             self.download_manager.write().await.insert(page);
 
             let image = Self::save_page(url, self.api.client(), &path).await?;
-            self.generate_scaled_version(image, page).await?;
+            self.generate_scaled_version(&image, page).await?;
 
             self.download_manager.write().await.remove(&page);
 
@@ -279,20 +284,17 @@ impl MangaReader {
     }
     pub async fn generate_scaled_version(
         &self,
-        mut original_image: DynamicImage,
+        original_image: &PhotonImage,
         page: Page,
     ) -> anyhow::Result<()> {
-        original_image = original_image.resize(405, 660, FilterType::Lanczos3);
-        let (_, mut ps, _) = self.get_url_with_path(page)?;
-        ps = PathBuf::from("/tmp/mangarr/preview").join(ps.file_name().context("no")?);
-        if !ps.exists() {
-            let mut buf = vec![];
+        let image = resize(original_image, 405, 660, SamplingFilter::Lanczos3);
 
-            let encoder = PngEncoder::new(&mut buf);
+        let (_, mut path, _) = self.get_url_with_path(page)?;
+        path = PathBuf::from("/tmp/mangarr/preview").join(path.file_name().context("no")?);
 
-            original_image.write_with_encoder(encoder)?;
-
-            fs::write(ps, buf).await?;
+        if !path.exists() {
+            let bytes = image.get_bytes();
+            smol::fs::write(path, bytes).await?;
         }
         Ok(())
     }
@@ -309,11 +311,12 @@ impl MangaReader {
         let ps = PathBuf::from(format!("/tmp/mangarr/pic{hashed_value}.png"));
         Ok((url, ps.clone(), ps.with_extension("part")))
     }
+
     async fn save_page(
         url: &str,
         client: Client,
         path: impl AsRef<Path> + Send,
-    ) -> anyhow::Result<DynamicImage> {
+    ) -> anyhow::Result<PhotonImage> {
         let path = path.as_ref();
         let bytes = client
             .get(url)
@@ -323,29 +326,24 @@ impl MangaReader {
             .bytes()
             .await?;
 
-        let mut non_grayscale = vec![];
+        let mut image = open_image_from_bytes(&bytes)?;
 
-        let non_grayscale_encoder = PngEncoder::new(&mut non_grayscale);
-
-        let mut image = ImageReader::new(Cursor::new(bytes))
-            .with_guessed_format()?
-            .decode()?;
-
-        let is_almost_grayscale = image.pixels().all(|(_, _, Rgba([r, g, b, _]))| {
+        let is_almost_grayscale = image.get_raw_pixels().chunks_exact(3).all(|x| {
+            let [r, g, b] = *x else {
+                unreachable!("somehow not equal to 3");
+            };
             r.abs_diff(g) < 3 && g.abs_diff(b) < 3 && r.abs_diff(b) < 3
         });
 
         if is_almost_grayscale {
-            image = image.grayscale();
+            monochrome::grayscale(&mut image);
+        } else {
+            saturate_hsluv(&mut image, 0.3);
         }
 
-        image.write_with_encoder(non_grayscale_encoder)?;
+        let bytes = image.get_bytes();
+        smol::fs::write(path, bytes).await?;
 
-        let mut file = fs::File::create(path).await?;
-
-        file.write_all(&non_grayscale).await?;
-
-        file.flush().await?;
         Ok(image)
     }
 }

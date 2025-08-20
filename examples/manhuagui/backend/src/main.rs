@@ -358,11 +358,11 @@ impl AppLoadBackend for MyBackend {
                 .map(|(i, x)| format!("{}:{x:#?}", i + 1))
                 .collect::<Vec<_>>()
                 .join("\n");
-            // panic!("{err:#?}");
-            functionality
-                .send_typed_message(SendMessage::Error(format!("error: {err:#?}")))
-                .await
-                .expect("can't send message");
+            panic!("{err:#?}")
+            // functionality
+            //     .send_typed_message(SendMessage::Error(format!("error: {err:#?}")))
+            //     .await
+            //     .expect("can't send message");
         }
     }
 }
