@@ -2,7 +2,10 @@ mod bookshelf;
 mod manga_reader;
 mod message;
 
-use std::{fs::remove_dir_all, future::Future, path::PathBuf, pin::Pin, process::exit, task::Poll};
+use std::{
+    collections::HashMap, fs::remove_dir_all, future::Future, path::PathBuf, pin::Pin,
+    process::exit, task::Poll,
+};
 
 use anyhow::{Context, bail};
 use appload_client::{AppLoadBackend, Message};
@@ -43,6 +46,10 @@ impl<T: Send + 'static> AbortableTask<T> {
     pub fn abort(&self) {
         self.handle.abort();
     }
+
+    pub fn detach(self) {
+        self.task.detach();
+    }
 }
 
 impl<T> Future for AbortableTask<T> {
@@ -71,7 +78,7 @@ type Backend = dyn MangaBackend;
 struct MyBackend {
     bookshelf: BookShelf,
     manga: MangaReader,
-    handlers: Vec<AbortableTask<(usize, usize)>>,
+    handlers: HashMap<usize, AbortableTask<(usize, usize)>>,
     state: State,
 }
 
@@ -93,7 +100,7 @@ impl MyBackend {
             bookshelf: BookShelf::new().unwrap(),
             manga: MangaReader::new(None, None).unwrap(),
             state: State::default(),
-            handlers: Vec::new(),
+            handlers: HashMap::new(),
         }
     }
     #[allow(clippy::too_many_lines)]
@@ -239,7 +246,7 @@ impl MyBackend {
     }
 
     async fn clear_download_handles(&mut self) {
-        for x in &mut self.handlers {
+        for x in self.handlers.values_mut() {
             x.abort();
         }
         self.handlers.clear();
@@ -270,10 +277,19 @@ impl MyBackend {
                 self.manga
                     .save_to_disk(self.manga.current_page, functionality)
                     .await?;
-                let handle = self
-                    .manga
-                    .prefetch_pages(self.manga.pages_len(), functionality);
-                self.handlers.push(handle);
+
+                if !self
+                    .handlers
+                    .contains_key(&self.manga.current_page.chapter())
+                {
+                    self.manga.prefetch_chapters();
+
+                    let handle = self
+                        .manga
+                        .prefetch_pages(self.manga.pages_len(), functionality);
+                    self.handlers
+                        .insert(self.manga.current_page.chapter(), handle);
+                }
 
                 functionality
                     .send_typed_message(SendMessage::BackendImage)

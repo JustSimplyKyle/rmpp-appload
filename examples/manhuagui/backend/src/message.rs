@@ -132,7 +132,7 @@ impl SendMessage {
                     "totalPages"     : total_pages.to_string(),
                     "lastReadChapter": (manga.current_page.chapter() + 1).to_string(),
                     "totalChapters"  : manga.chapters.len().to_string(),
-                    "description"    : details.description.unwrap_or_default(),
+                    "description"    : details.description.clone().unwrap_or_default(),
                 }];
 
                 (17, Some(v.to_string()))

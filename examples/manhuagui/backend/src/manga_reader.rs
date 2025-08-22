@@ -40,12 +40,14 @@ use crate::{
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MangaReader {
     pub api: Arc<Backend>,
-    pub details: SManga,
-    pub chapters: Vec<SChapter>,
-    pub pages: HashMap<usize, Vec<String>>,
+    pub details: Arc<SManga>,
+    pub chapters: Arc<[SChapter]>,
+    pub pages: HashMap<usize, Arc<[String]>>,
     pub current_page: Page,
     #[serde(skip)]
     download_manager: Arc<RwLock<DownloadManager>>,
+    #[serde(skip)]
+    chapters_manager: Arc<RwLock<HashMap<usize, Arc<[String]>>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -88,11 +90,12 @@ impl MangaReader {
         let manga_reader = if let Some((details, chapters, pages, active)) = params.into() {
             Self {
                 api,
-                details,
-                chapters,
-                pages: HashMap::from([(0, pages)]),
+                details: details.into(),
+                chapters: chapters.into(),
+                pages: HashMap::from([(0, pages.into_iter().collect())]),
                 current_page: active,
-                download_manager: RwLock::new(DownloadManager::default()).into(),
+                download_manager: Default::default(),
+                chapters_manager: Default::default(),
             }
         } else {
             Self {
@@ -101,7 +104,8 @@ impl MangaReader {
                 chapters: Default::default(),
                 pages: Default::default(),
                 current_page: Default::default(),
-                download_manager: RwLock::new(DownloadManager::default()).into(),
+                download_manager: Default::default(),
+                chapters_manager: Default::default(),
             }
         };
         Ok(manga_reader)
@@ -167,14 +171,20 @@ impl MangaReader {
         self.pages().len()
     }
     pub async fn update_chapter(&mut self) -> anyhow::Result<()> {
-        if !self.pages.contains_key(&self.current_page.chapter) {
-            let pages = self.download_pages_url(self.current_page.chapter).await?;
-            self.pages.insert(self.current_page.chapter, pages);
+        let chapter = self.current_page.chapter;
+        if !self.pages.contains_key(&chapter) {
+            if let Some(pages) = self.chapters_manager.read().await.get(&chapter) {
+                self.pages.insert(chapter, pages.clone());
+            } else {
+                dbg!("chapters manager not having this shit");
+                let pages = self.download_pages_url(chapter).await?;
+                self.pages.insert(chapter, pages);
+            }
         }
         Ok(())
     }
 
-    async fn download_pages_url(&self, chapter: usize) -> Result<Vec<String>, anyhow::Error> {
+    async fn download_pages_url(&self, chapter: usize) -> anyhow::Result<Arc<[String]>> {
         let s_chapter = &self.chapters[chapter];
         let pages = self
             .api
@@ -182,7 +192,7 @@ impl MangaReader {
             .await?
             .into_iter()
             .map(|x| x.image_url)
-            .collect::<Vec<_>>();
+            .collect::<Arc<[_]>>();
         Ok(pages)
     }
 
@@ -232,6 +242,45 @@ impl MangaReader {
             (current, target)
         })
     }
+
+    pub fn prefetch_chapters(&self) {
+        let downloaded_chapters = self.pages.keys().copied().collect::<Vec<_>>();
+        let undownloaded_chapters =
+            (0..self.chapters.len()).filter(move |x| !downloaded_chapters.contains(x));
+        let manga = self.clone();
+        let chapters_manager = self.chapters_manager.clone();
+
+        spawn(async move {
+            println!("chapter manager has started");
+            let results = stream::iter(undownloaded_chapters)
+                .map(|chapter| {
+                    let manga = manga.clone();
+                    let chapters_manager = chapters_manager.clone();
+                    spawn(async move {
+                        let each_page_url = manga.download_pages_url(chapter).await?;
+                        chapters_manager
+                            .write()
+                            .await
+                            .insert(chapter, each_page_url);
+                        println!("finish downloading chapter {chapter}'s page urls");
+                        anyhow::Ok(())
+                    })
+                })
+                .buffered(3)
+                .collect::<Vec<_>>()
+                .await;
+
+            // reason: we only discard the `Aborted` case of error
+            #[allow(clippy::manual_flatten)]
+            for x in results {
+                if let Ok(x) = x {
+                    x.expect("manga download issue");
+                }
+            }
+        })
+        .detach();
+    }
+
     pub async fn clear_download_managear(&self) {
         self.download_manager.write().await.clear();
     }
