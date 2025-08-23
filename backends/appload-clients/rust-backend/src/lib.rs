@@ -187,7 +187,7 @@ impl<T: AppLoadBackend> AppLoad<T> {
 
 fn send_message(fd: i32, msg_type: u32, data: &str) -> Result<()> {
     let byte_data = data.as_bytes();
-    dbg!(byte_data.len());
+    byte_data.len();
     let header = MessageHeader {
         length: byte_data.len() as u32,
         msg_type,

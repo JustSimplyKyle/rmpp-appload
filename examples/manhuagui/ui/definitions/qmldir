@@ -1,0 +1,2 @@
+singleton StateManager 1.0 StateManager.qml
+singleton BackendController 1.0 BackendController.qml
