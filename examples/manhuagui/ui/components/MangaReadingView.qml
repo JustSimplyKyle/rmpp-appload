@@ -15,7 +15,10 @@ ColumnLayout {
         Layout.fillHeight: true
         fillMode: Image.PreserveAspectFit
         RowLayout {
-            anchors.fill: parent
+            anchors.top: parent
+            anchors.left: parent
+            anchors.right: parent
+            height: parent.height - 100 // allow swipe down to happen
             MouseArea {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
