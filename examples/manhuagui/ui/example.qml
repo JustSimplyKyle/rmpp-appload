@@ -432,9 +432,8 @@ Rectangle {
         Image {
             id: backendImage
             visible: activePage === "mangaReading"
-            Layout.preferredHeight: backendImage.visible ? null : 0
-            Layout.fillWidth: backendImage.visible ? true : false
-            Layout.fillHeight: backendImage.visible ? true : false
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             fillMode: Image.PreserveAspectFit
             RowLayout {
                 anchors.fill: parent

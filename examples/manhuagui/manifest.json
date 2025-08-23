@@ -1,7 +1,7 @@
 {
     "name": "Manhuagui",
     "loadsBackend": true,
-    "entry": "/ui/example.qml",
+    "entry": "/main.qml",
     "id": "manhuagui",
     "supportsScaling": false,
     "canHaveMultipleFrontends": true

@@ -1,6 +1,28 @@
 <RCC>
-    <qresource>
-        <file>ui/example.qml</file>
-        <file>ui/SwipeDetection.qml</file>
+    <qresource prefix="/">
+        <!-- 
+          The content of the tag is the REAL path on disk.
+          The 'alias' is the VIRTUAL path inside the application.
+        -->
+        <file alias="main.qml">ui/main.qml</file>
+		<file alias="definitions/qmldir">ui/definitions/qmldir</file>
+        <file alias="definitions/SwipeDetection.qml">ui/definitions/SwipeDetection.qml</file>
+        <file alias="definitions/StateManager.qml">ui/definitions/StateManager.qml</file>
+        <file alias="definitions/BackendController.qml">ui/definitions/BackendController.qml</file>
+        
+        <!-- Also add the ui/ prefix to the component paths -->
+        <file alias="components/MangaReadingView.qml">ui/components/MangaReadingView.qml</file>
+        <file alias="components/ChapterListView.qml">ui/components/ChapterListView.qml</file>
+        <file alias="components/PageListView.qml">ui/components/PageListView.qml</file>
+        <file alias="components/BookshelfView.qml">ui/components/BookshelfView.qml</file>
+        <file alias="components/BackendSelectionView.qml">ui/components/BackendSelectionView.qml</file>
+        <file alias="components/SearchView.qml">ui/components/SearchView.qml</file>
+        <file alias="components/BottomBar.qml">ui/components/BottomBar.qml</file>
+
+        <!-- 
+          The 'example.qml' file should probably be removed if it's not used,
+          but if you need it, add it here with the correct path.
+        -->
+        <file alias="example.qml">ui/example.qml</file>
     </qresource>
 </RCC>
