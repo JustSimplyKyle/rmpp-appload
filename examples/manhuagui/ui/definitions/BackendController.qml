@@ -56,6 +56,12 @@ QtObject {
                     }
                     StateManager.updateOrCreatePage(targetChapter, targetPage, path);
                     break;
+                case 11:
+                    console.log(contents);
+                    if(contents === "connected frontend") {
+                        StateManager.backendInitialized()
+                    }
+                    break;
                 case 12:
                     StateManager.mangaDescription = `${contents}`;
                     break;

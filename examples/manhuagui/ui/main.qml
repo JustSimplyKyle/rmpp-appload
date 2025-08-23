@@ -34,8 +34,8 @@ Rectangle {
 
     Rectangle {
         z: 100000
-        anchors.top: view.top
-        anchors.left: view.left
+        anchors.top: parent.top
+        anchors.left: parent.left
         border.width: 2
         border.color: "red"
         width: 100
@@ -53,12 +53,17 @@ Rectangle {
     }
     
 
-    Component.onCompleted: {
-        // simple race condition fix
-        setTimeout(function() {
-            console.log("sending message (14)");
+    Connections {
+        target: StateManager
+
+        function onBackendInitialized(TargetChapter, TargetPage) {
+            console.log("initialized backend!");
             BackendController.sendMessage(14, "")
-        }, 300)
+        }
+    }
+
+    Component.onCompleted: {
+        BackendController.sendMessage(69420, "");
     }
 
 
