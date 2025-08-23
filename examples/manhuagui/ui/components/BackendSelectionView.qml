@@ -46,8 +46,8 @@ GridView {
             }
         }
         Rectangle {
-            width: view.width - 300
-            height: chapterList.cellHeight + 1
+            width: backendSelection.width - 300
+            height: backendSelection.cellHeight + 1
             border.width: 2
             border.color: "black"
             MouseArea {
