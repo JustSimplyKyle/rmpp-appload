@@ -32,6 +32,27 @@ Rectangle {
         }
     }
 
+    Rectangle {
+        z: 100000
+        anchors.top: view.top
+        anchors.left: view.left
+        border.width: 2
+        border.color: "red"
+        width: 100
+        height: 100
+        MouseArea {
+            anchors.fill: parent
+            onClicked: () => { BackendController.sendMessage(99, "") }
+        }
+        Image {
+            anchors.fill: parent
+            anchors.margins: 20
+            fillMode: Image.PreserveAspectFit
+            source: "https://cdn-icons-png.flaticon.com/512/75/75519.png"
+        }
+    }
+    
+
     Component.onCompleted: {
         // simple race condition fix
         setTimeout(function() {
