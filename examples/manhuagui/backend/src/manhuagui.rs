@@ -68,11 +68,9 @@ struct Sl {
     m: String,
 }
 
-#[async_trait::async_trait]
-#[typetag::serde]
 impl MangaBackend for Manhuagui {
-    fn client(&self) -> Client {
-        self.client.clone()
+    fn client(&self) -> std::option::Option<reqwest::Client> {
+        self.client.clone().into()
     }
     async fn search_by_id(&self, id: &str) -> anyhow::Result<SManga> {
         let url = format!("{}/comic/{}", self.base_url, id);

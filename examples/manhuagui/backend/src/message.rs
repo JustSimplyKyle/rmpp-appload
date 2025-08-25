@@ -3,13 +3,14 @@ use std::{path::PathBuf, sync::Arc};
 use anyhow::{Context, bail};
 use appload_client::Message;
 use backend::{
+    Backend,
     epub::Epub,
     manhuagui::{Manhuagui, Preferences},
     nhentai::NHentai,
 };
 use serde_json::json;
 
-use crate::{Backend, BackendReplier, bookshelf::BookShelfKey, manga_reader::MangaReader};
+use crate::{BackendReplier, bookshelf::BookShelfKey, manga_reader::MangaReader};
 
 #[derive(Debug)]
 pub enum RecvMessage {
@@ -35,15 +36,16 @@ impl TryFrom<Message> for RecvMessage {
     fn try_from(message: Message) -> Result<Self, Self::Error> {
         let backend_from_str: fn(&str) -> Result<Arc<Backend>, anyhow::Error> = |x| {
             let x = match x {
-                "NHentai" => {
-                    Arc::new(NHentai::new("zh-tw".into(), "zh-tw".into(), true)?) as Arc<Backend>
-                }
-                "Manhuagui" => Arc::new(Manhuagui::new(Preferences::default())?) as Arc<Backend>,
-                "Epub" => Arc::new(Epub::new(
-                    std::env::home_dir()
-                        .context("no home dir")?
-                        .join("mangarr-books"),
-                )) as Arc<Backend>,
+                "NHentai" => Arc::new(NHentai::new("zh-tw".into(), "zh-tw".into(), true)?.into()),
+                "Manhuagui" => Arc::new(Manhuagui::new(Preferences::default())?.into()),
+                "Epub" => Arc::new(
+                    Epub::new(
+                        std::env::home_dir()
+                            .context("no home dir")?
+                            .join("mangarr-books"),
+                    )
+                    .into(),
+                ),
                 _ => bail!("Unsupported backend."),
             };
             anyhow::Ok(x)
@@ -64,7 +66,7 @@ impl TryFrom<Message> for RecvMessage {
             13 => {
                 let (backend, manga_url) = message.contents.split_once("\n").unwrap();
                 let backend = backend_from_str(backend)?;
-                let key = BookShelfKey::new(&*backend, manga_url.to_string());
+                let key = BookShelfKey::new(&backend, manga_url.to_string());
                 Self::SelectBookFromBookShelf(key)
             }
             14 => Self::BookShelfView,

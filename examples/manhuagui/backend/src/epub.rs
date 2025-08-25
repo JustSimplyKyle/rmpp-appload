@@ -75,7 +75,7 @@ impl Epub {
             .and_then(|x| x.first().cloned());
         let date = epub.metadata.get("date").and_then(|x| x.first().cloned());
         Ok(SManga {
-            url: ImageUrl::LocalEpub(path),
+            url: ImageUrl::new_epub(path),
             title,
             thumbnail_url: None,
             author,
@@ -87,7 +87,10 @@ impl Epub {
     }
     // base/[id]/[chapter-name]/[book-name]
     pub async fn create_s_chapters(manga: &SManga) -> anyhow::Result<Vec<SChapter>> {
-        let ImageUrl::LocalEpub(path) = &manga.url else {
+        let ImageUrl::LocalEpub {
+            epub_path: path, ..
+        } = &manga.url
+        else {
             unreachable!()
         };
 
@@ -109,7 +112,7 @@ impl Epub {
                         .context("plz don't be empty")?
                         .to_string_lossy()
                         .to_string(),
-                    url: ImageUrl::LocalEpub(path),
+                    url: ImageUrl::new_epub(path),
                     chapter_number: chapter_number as f32,
                     date_upload: None,
                 })
@@ -120,9 +123,13 @@ impl Epub {
         Ok(p)
     }
     pub async fn fetch_pages(base: PathBuf, chapter: &SChapter) -> anyhow::Result<Vec<Page>> {
-        let ImageUrl::LocalEpub(path) = &chapter.url else {
+        let ImageUrl::LocalEpub {
+            epub_path: path, ..
+        } = &chapter.url
+        else {
             unreachable!()
         };
+
         let mut epub = EpubDoc::new(path).unwrap();
         let mut v = vec![];
         for i in 0..epub.get_num_pages() {
@@ -140,37 +147,22 @@ impl Epub {
                     .to_owned()
             };
             let img_path = img_path.strip_prefix("../").unwrap_or(&img_path);
-            let img = epub
-                .get_resource_by_path(img_path)
-                .context("resource does not exist")?;
-            let file_stem = PathBuf::from(img_path)
-                .extension()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-
-            let mut hasher = DefaultHasher::new();
-            img.hash(&mut hasher);
-            let hashed_value = hasher.finish();
-
-            let fs_path = base.join(format!("image/pic{hashed_value}.{file_stem}"));
-
-            if let Some(parent) = fs_path.parent()
-                && !parent.exists()
-            {
-                create_dir_all(parent).await?;
-            }
-
-            smol::fs::write(&fs_path, img).await?;
-
             v.push(Page {
                 index: i,
                 url: String::new(),
-                image_url: ImageUrl::LocalEpub(fs_path),
+                image_url: ImageUrl::LocalEpub {
+                    epub_path: path.to_path_buf(),
+                    img_path: Some(img_path.to_string()),
+                },
             });
         }
         dbg!("finished page fetching for epub");
         Ok(v)
+    }
+    pub fn fetch_img(&self, path: PathBuf, epub_img_path: &str) -> anyhow::Result<Vec<u8>> {
+        let mut epub = EpubDoc::new(path).unwrap();
+        epub.get_resource_by_path(epub_img_path)
+            .context("resource does not exist")
     }
     #[must_use]
     pub const fn new(path: PathBuf) -> Self {
@@ -195,8 +187,6 @@ impl Default for Epub {
     }
 }
 
-#[async_trait::async_trait]
-#[typetag::serde]
 impl MangaBackend for Epub {
     async fn search_by_id(&self, id: &str) -> anyhow::Result<SManga> {
         self.create_s_manga(id).await
@@ -212,7 +202,7 @@ impl MangaBackend for Epub {
         Self::fetch_pages(self.base.clone(), chapter).await
     }
 
-    fn client(&self) -> Client {
-        Client::default()
+    fn client(&self) -> std::option::Option<reqwest::Client> {
+        Client::default().into()
     }
 }

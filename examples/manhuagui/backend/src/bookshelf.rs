@@ -1,6 +1,6 @@
 use std::{collections::HashMap, env, path::PathBuf};
 
-use backend::{MangaBackend, SManga, epub::Epub};
+use backend::{Backend, MangaBackend, SManga, epub::Epub};
 use serde::{Deserialize, Serialize};
 use smol::fs;
 
@@ -19,7 +19,9 @@ impl BookShelfKey {
     fn from_manga(manga: &MangaReader) -> Self {
         let id = match manga.details.url.clone() {
             backend::ImageUrl::Web(x) => x,
-            backend::ImageUrl::LocalEpub(path) => {
+            backend::ImageUrl::LocalEpub {
+                epub_path: path, ..
+            } => {
                 let id_path = path.parent().unwrap().parent().unwrap();
                 id_path.to_string_lossy().to_string()
             }
@@ -29,7 +31,7 @@ impl BookShelfKey {
             manga_distinguisher: id,
         }
     }
-    pub fn new(id: &(impl MangaBackend + ?Sized), manga_url: String) -> Self {
+    pub fn new(id: &Backend, manga_url: String) -> Self {
         Self {
             backend_id: id.id(),
             manga_distinguisher: manga_url,

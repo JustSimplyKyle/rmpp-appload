@@ -74,8 +74,6 @@ fn main() {
     }));
 }
 
-type Backend = dyn MangaBackend;
-
 struct MyBackend {
     bookshelf: BookShelf,
     manga: MangaReader,

@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, bail};
 use backend::{
-    ImageUrl, SChapter, SManga,
+    Backend, ImageUrl, SChapter, SManga,
     manhuagui::{Manhuagui, Preferences},
 };
 use futures::{StreamExt, TryStreamExt, stream};
@@ -32,7 +32,7 @@ use smol::{
 };
 
 use crate::{
-    AbortableTask, Backend, BackendReplier,
+    AbortableTask, BackendReplier,
     message::{ReplierExt, SendMessage},
     spawn,
 };
@@ -85,7 +85,7 @@ impl MangaReader {
     ) -> anyhow::Result<Self> {
         let api = match api.into() {
             Some(x) => x,
-            None => Arc::new(Manhuagui::new(Preferences::default())?),
+            None => Arc::new(Manhuagui::new(Preferences::default())?.into()),
         };
         let manga_reader = if let Some((details, chapters, pages, active)) = params.into() {
             Self {
@@ -299,7 +299,7 @@ impl MangaReader {
 
             self.download_manager.write().await.insert(page);
 
-            let image = Self::save_page(url, self.api.client(), &path).await?;
+            let image = self.save_page(url, &path).await?;
             self.generate_scaled_version(&image, page).await?;
 
             self.download_manager.write().await.remove(&page);
@@ -362,14 +362,17 @@ impl MangaReader {
     }
 
     async fn save_page(
+        &self,
         url: &ImageUrl,
-        client: Client,
         path: impl AsRef<Path> + Send,
     ) -> anyhow::Result<PhotonImage> {
         let path = path.as_ref();
         let mut image = match url {
             ImageUrl::Web(url) => {
-                let bytes = client
+                let bytes = self
+                    .api
+                    .client()
+                    .unwrap()
                     .get(url)
                     .send()
                     .await?
@@ -379,8 +382,14 @@ impl MangaReader {
 
                 open_image_from_bytes(&bytes)?
             }
-            ImageUrl::LocalEpub(path_buf) => {
-                let bytes = smol::fs::read(path_buf).await?;
+            ImageUrl::LocalEpub {
+                epub_path,
+                img_path,
+            } => {
+                let Backend::Epub(x) = &*self.api else {
+                    unreachable!()
+                };
+                let bytes = x.fetch_img(epub_path.clone(), &img_path.clone().unwrap())?;
                 open_image_from_bytes(&bytes)?
             }
         };
