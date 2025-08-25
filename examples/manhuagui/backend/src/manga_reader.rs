@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, bail};
 use backend::{
-    SChapter, SManga,
+    ImageUrl, SChapter, SManga,
     manhuagui::{Manhuagui, Preferences},
 };
 use futures::{StreamExt, TryStreamExt, stream};
@@ -42,12 +42,12 @@ pub struct MangaReader {
     pub api: Arc<Backend>,
     pub details: Arc<SManga>,
     pub chapters: Arc<[SChapter]>,
-    pub pages: HashMap<usize, Arc<[String]>>,
+    pub pages: HashMap<usize, Arc<[ImageUrl]>>,
     pub current_page: Page,
     #[serde(skip)]
     download_manager: Arc<RwLock<DownloadManager>>,
     #[serde(skip)]
-    chapters_manager: Arc<RwLock<HashMap<usize, Arc<[String]>>>>,
+    chapters_manager: Arc<RwLock<HashMap<usize, Arc<[ImageUrl]>>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -81,7 +81,7 @@ impl Page {
 impl MangaReader {
     pub fn new(
         api: impl Into<Option<Arc<Backend>>>,
-        params: impl Into<Option<(SManga, Vec<SChapter>, Vec<String>, Page)>>,
+        params: impl Into<Option<(SManga, Vec<SChapter>, Vec<ImageUrl>, Page)>>,
     ) -> anyhow::Result<Self> {
         let api = match api.into() {
             Some(x) => x,
@@ -92,7 +92,7 @@ impl MangaReader {
                 api,
                 details: details.into(),
                 chapters: chapters.into(),
-                pages: HashMap::from([(0, pages.into_iter().collect())]),
+                pages: HashMap::from([(0, pages.into())]),
                 current_page: active,
                 download_manager: Default::default(),
                 chapters_manager: Default::default(),
@@ -152,7 +152,7 @@ impl MangaReader {
             .await?;
         Ok(())
     }
-    pub fn pages(&self) -> &[String] {
+    pub fn pages(&self) -> &[ImageUrl] {
         &self.pages[&self.current_page.chapter]
     }
     pub async fn with_chapter_mut(&mut self, f: impl Fn(&mut usize)) -> anyhow::Result<()> {
@@ -182,18 +182,6 @@ impl MangaReader {
             }
         }
         Ok(())
-    }
-
-    async fn download_pages_url(&self, chapter: usize) -> anyhow::Result<Arc<[String]>> {
-        let s_chapter = &self.chapters[chapter];
-        let pages = self
-            .api
-            .fetch_pages(s_chapter)
-            .await?
-            .into_iter()
-            .map(|x| x.image_url)
-            .collect::<Arc<[_]>>();
-        Ok(pages)
     }
 
     pub fn prefetch_pages(
@@ -348,7 +336,19 @@ impl MangaReader {
         Ok(())
     }
 
-    pub fn get_url_with_path(&self, page: Page) -> anyhow::Result<(&str, PathBuf, PathBuf)> {
+    async fn download_pages_url(&self, chapter: usize) -> anyhow::Result<Arc<[ImageUrl]>> {
+        let s_chapter = &self.chapters[chapter];
+        let pages = self
+            .api
+            .fetch_pages(s_chapter)
+            .await?
+            .into_iter()
+            .map(|x| x.image_url)
+            .collect::<Arc<[_]>>();
+        Ok(pages)
+    }
+
+    pub fn get_url_with_path(&self, page: Page) -> anyhow::Result<(&ImageUrl, PathBuf, PathBuf)> {
         let Some(url) = self.pages().get(page.page) else {
             bail!("out of bounds");
         };
@@ -362,21 +362,28 @@ impl MangaReader {
     }
 
     async fn save_page(
-        url: &str,
+        url: &ImageUrl,
         client: Client,
         path: impl AsRef<Path> + Send,
     ) -> anyhow::Result<PhotonImage> {
         let path = path.as_ref();
-        let bytes = client
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
+        let mut image = match url {
+            ImageUrl::Web(url) => {
+                let bytes = client
+                    .get(url)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .bytes()
+                    .await?;
 
-        let mut image = open_image_from_bytes(&bytes)?;
-
+                open_image_from_bytes(&bytes)?
+            }
+            ImageUrl::LocalEpub(path_buf) => {
+                let bytes = smol::fs::read(path_buf).await?;
+                open_image_from_bytes(&bytes)?
+            }
+        };
         let is_almost_grayscale = image.get_raw_pixels().chunks_exact(3).all(|x| {
             let [r, g, b] = *x else {
                 unreachable!("somehow not equal to 3");

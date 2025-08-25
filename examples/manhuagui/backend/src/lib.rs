@@ -1,15 +1,16 @@
-use std::{fmt::Display, str::FromStr, sync::Arc};
+use std::{fmt::Display, ops::Deref, path::PathBuf, str::FromStr, sync::Arc};
 
 use manhuagui::{Manhuagui, Preferences};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+pub mod epub;
 pub mod manhuagui;
 pub mod nhentai;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct SManga {
-    pub url: String,
+    pub url: ImageUrl,
     pub title: String,
     pub thumbnail_url: Option<String>,
     pub author: Option<String>,
@@ -21,7 +22,7 @@ pub struct SManga {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SChapter {
-    pub url: String,
+    pub url: ImageUrl,
     pub name: String,
     pub chapter_number: f32,
     pub date_upload: Option<i64>,
@@ -31,7 +32,37 @@ pub struct SChapter {
 pub struct Page {
     pub index: usize,
     pub url: String,
-    pub image_url: String,
+    pub image_url: ImageUrl,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Hash, PartialEq, Eq)]
+pub enum ImageUrl {
+    Web(String),
+    LocalEpub(PathBuf),
+}
+
+impl ImageUrl {
+    pub fn get_distinguisher(&self) -> String {
+        match self.clone() {
+            Self::Web(x) => x,
+            Self::LocalEpub(path) => {
+                let id_path = path.parent().unwrap().parent().unwrap();
+                id_path.to_string_lossy().to_string()
+            }
+        }
+    }
+}
+
+impl From<PathBuf> for ImageUrl {
+    fn from(v: PathBuf) -> Self {
+        Self::LocalEpub(v)
+    }
+}
+
+impl From<String> for ImageUrl {
+    fn from(v: String) -> Self {
+        Self::Web(v)
+    }
 }
 
 #[typetag::serde(tag = "type")]
@@ -55,7 +86,7 @@ pub trait MangaBackend: std::fmt::Debug + Send + Sync + Display {
 impl Default for SManga {
     fn default() -> Self {
         Self {
-            url: String::new(),
+            url: ImageUrl::Web(String::new()),
             title: String::new(),
             thumbnail_url: None,
             author: None,

@@ -11,7 +11,7 @@ use reqwest::{
 use scraper::Html;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{MangaBackend, MangaStatus, Page, SChapter, SManga};
+use crate::{ImageUrl, MangaBackend, MangaStatus, Page, SChapter, SManga};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Manhuagui {
@@ -156,14 +156,14 @@ impl MangaBackend for Manhuagui {
 
                     // mutable because post date_upload usage
                     let mut current_chapter = SChapter {
-                        url,
+                        url: ImageUrl::Web(url),
                         name,
                         chapter_number,
                         date_upload: None,
                     };
 
                     if let Some(ref latest_href) = latest_chapter_href
-                        && current_chapter.url == *latest_href
+                        && current_chapter.url == ImageUrl::Web(latest_href.clone())
                     {
                         let date_selector = Selector::parse(
                             "div.book-detail > ul.detail-list > li.status > span > span.red",
@@ -177,6 +177,7 @@ impl MangaBackend for Manhuagui {
                 }
             }
         }
+        let chapters = chapters.into_iter().rev().collect();
 
         Ok(chapters)
     }
@@ -234,7 +235,7 @@ impl MangaBackend for Manhuagui {
                 Page {
                     index: i,
                     url: String::new(),
-                    image_url: imgurl,
+                    image_url: ImageUrl::Web(imgurl),
                 }
             })
             .collect();
@@ -407,7 +408,7 @@ impl Manhuagui {
             _ => MangaStatus::Unknown,
         };
         SManga {
-            url: url.into(),
+            url: ImageUrl::Web(url.into()),
             title,
             thumbnail_url,
             author,
@@ -419,12 +420,18 @@ impl Manhuagui {
     }
     #[must_use]
     pub fn chapter_url(&self, api: &SManga) -> String {
-        format!("{}{}", self.base_url, api.url)
+        let ImageUrl::Web(url) = &api.url else {
+            unreachable!();
+        };
+        format!("{}{}", self.base_url, url)
     }
 
     #[must_use]
     pub fn page_url(&self, api: &SChapter) -> String {
-        format!("{}{}", self.base_url, api.url)
+        let ImageUrl::Web(url) = &api.url else {
+            unreachable!();
+        };
+        format!("{}{}", self.base_url, url)
     }
 
     fn parse_date(date_str: &str) -> i64 {

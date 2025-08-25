@@ -9,6 +9,7 @@ appload-client = { path = "../../../backends/appload-clients/rust-backend" }
 async-compat = "0.2.4"
 async-trait = "0.1.88"
 chrono = "0.4.41"
+epub = "2.1.4"
 futures = "0.3.31"
 palette = "0.7.6"
 photon-rs = "0.3.3"

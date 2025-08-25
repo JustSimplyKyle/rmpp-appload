@@ -1,8 +1,9 @@
 use std::{path::PathBuf, sync::Arc};
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use appload_client::Message;
 use backend::{
+    epub::Epub,
     manhuagui::{Manhuagui, Preferences},
     nhentai::NHentai,
 };
@@ -38,12 +39,17 @@ impl TryFrom<Message> for RecvMessage {
                     Arc::new(NHentai::new("zh-tw".into(), "zh-tw".into(), true)?) as Arc<Backend>
                 }
                 "Manhuagui" => Arc::new(Manhuagui::new(Preferences::default())?) as Arc<Backend>,
+                "Epub" => Arc::new(Epub::new(
+                    std::env::home_dir()
+                        .context("no home dir")?
+                        .join("mangarr-books"),
+                )) as Arc<Backend>,
                 _ => bail!("Unsupported backend."),
             };
             anyhow::Ok(x)
         };
         let msg = match message.msg_type {
-            appload_client::MSG_SYSTEM_NEW_COORDINATOR => Self::Connect,
+            appload_client::MSG_SYSTEM_NEW_COORDINATOR | 69420 => Self::Connect,
             1 => Self::SearchManga(message.contents),
             2 => Self::NextPage,
             3 => Self::PrevPage,
@@ -63,7 +69,7 @@ impl TryFrom<Message> for RecvMessage {
             }
             14 => Self::BookShelfView,
             99 => Self::Quit,
-            _ => bail!("Unknown message received."),
+            x => bail!("Unknown message received. {x}"),
         };
         Ok(msg)
     }
@@ -124,8 +130,9 @@ impl SendMessage {
             Self::BookshelfMangaDetails(manga) => {
                 let total_pages = manga.pages().len();
                 let details = manga.details;
+                let url = details.url.get_distinguisher();
                 let v = json![{
-                    "url"            : details.url,
+                    "url"            : url,
                     "title"          : details.title,
                     "backend"        : manga.api.to_string(),
                     "lastReadPage"   : (manga.current_page.page + 1).to_string(),

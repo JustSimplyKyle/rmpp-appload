@@ -1,11 +1,11 @@
 /// Based on <https://github.com/keiyoushi/extensions-source/blob/main/src/all/nhentai/src/eu/kanade/tachiyomi/extension/all/nhentai/NHentai.kt>
-use crate::{MangaBackend, MangaStatus, Page, SChapter, SManga};
-use anyhow::{bail, Context, Result};
+use crate::{ImageUrl, MangaBackend, MangaStatus, Page, SChapter, SManga};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
 use reqwest::{
+    Client, Url,
     cookie::Jar,
     header::{HeaderMap, HeaderValue, REFERER, USER_AGENT},
-    Client, Url,
 };
 use scraper::{Html, Selector};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -260,7 +260,7 @@ impl MangaBackend for NHentai {
         let genre = data.get_tags();
 
         Ok(SManga {
-            url: format!("/g/{search_id}/"), // Relative URL
+            url: format!("/g/{search_id}/").into(), // Relative URL
             title,
             thumbnail_url,
             status: MangaStatus::Completed,
@@ -272,8 +272,11 @@ impl MangaBackend for NHentai {
     }
 
     async fn fetch_chapters(&self, manga: &SManga) -> Result<Vec<SChapter>> {
+        let ImageUrl::Web(url) = &manga.url else {
+            unreachable!()
+        };
         // Extract manga ID from the URL.  We assume the URL is in the format `/g/<id>/`.
-        let manga_id = manga.url.trim_matches('/').split('/').nth(1);
+        let manga_id = url.trim_matches('/').split('/').nth(1);
         let client = self.client.clone();
 
         if let Some(manga_id) = manga_id {
@@ -296,12 +299,15 @@ impl MangaBackend for NHentai {
                 date_upload,
             }])
         } else {
-            bail!("Invalid manga URL format: {}", manga.url);
+            bail!("Invalid manga URL format: {}", url);
         }
     }
 
     async fn fetch_pages(&self, chapter: &SChapter) -> Result<Vec<Page>> {
-        let chapter_id = chapter.url.trim_matches('/').split('/').nth(1);
+        let ImageUrl::Web(url) = &chapter.url else {
+            unreachable!()
+        };
+        let chapter_id = url.trim_matches('/').split('/').nth(1);
         let client = self.client.clone();
 
         if let Some(chapter_id) = chapter_id {
@@ -348,14 +354,14 @@ impl MangaBackend for NHentai {
                     Page {
                         index: i,
                         url: String::new(), // nhentai does not require this
-                        image_url: img_url,
+                        image_url: ImageUrl::Web(img_url),
                     }
                 })
                 .collect();
 
             Ok(pages)
         } else {
-            bail!("Invalid chapter URL format: {}", chapter.url);
+            bail!("Invalid chapter URL format: {}", url);
         }
     }
 }

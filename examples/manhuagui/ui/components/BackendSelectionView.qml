@@ -20,6 +20,10 @@ GridView {
             name: "Manhuagui"
             desc: "The default backend. Works without any configuration."
         }
+        ListElement {
+            name: "Epub"
+            desc: "Reading books from an epub, requires that you place according to folder structure"
+        }
     }
 
     header: Rectangle {
@@ -55,7 +59,7 @@ GridView {
                 onClicked: () => {
                     StateManager.activeBackend = name;
                     BackendController.sendMessage(11, name);
-                    StateManager.activePage = StateManager.ActivePage.MangaReading
+                    StateManager.activePage = StateManager.ActivePage.Search
                     StateManager.pages = new Map();
                     StateManager.manga_id = "";
                     StateManager.totalChpt = 0;

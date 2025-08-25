@@ -1,6 +1,6 @@
 use std::{collections::HashMap, env, path::PathBuf};
 
-use backend::{MangaBackend, SManga};
+use backend::{MangaBackend, SManga, epub::Epub};
 use serde::{Deserialize, Serialize};
 use smol::fs;
 
@@ -11,21 +11,28 @@ pub struct BookShelf(HashMap<BookShelfKey, MangaReader>);
 
 #[derive(Clone, Eq, Hash, PartialEq, Deserialize, Serialize, Debug, Default)]
 pub struct BookShelfKey {
-    pub manga_url: String,
+    pub manga_distinguisher: String,
     backend_id: String,
 }
 
 impl BookShelfKey {
     fn from_manga(manga: &MangaReader) -> Self {
+        let id = match manga.details.url.clone() {
+            backend::ImageUrl::Web(x) => x,
+            backend::ImageUrl::LocalEpub(path) => {
+                let id_path = path.parent().unwrap().parent().unwrap();
+                id_path.to_string_lossy().to_string()
+            }
+        };
         Self {
             backend_id: manga.api.id(),
-            manga_url: manga.details.url.clone(),
+            manga_distinguisher: id,
         }
     }
     pub fn new(id: &(impl MangaBackend + ?Sized), manga_url: String) -> Self {
         Self {
             backend_id: id.id(),
-            manga_url,
+            manga_distinguisher: manga_url,
         }
     }
 }
@@ -37,7 +44,11 @@ impl BookShelf {
         if let Some(path) = path.filter(|x| x.exists()) {
             let s = std::fs::read_to_string(&path)?;
             let x: Vec<(BookShelfKey, MangaReader)> = serde_json::from_str(&s)?;
-            let x = x.into_iter().collect();
+            let mut x: HashMap<BookShelfKey, MangaReader> = x.into_iter().collect();
+            // destroys pages because we need to "re-move" the files from within the epub to image
+            // x.iter_mut()
+            //     .filter(|(key, _)| key.backend_id == Epub::default().id())
+            //     .for_each(|x| x.1.pages = HashMap::new());
             Ok(Self(x))
         } else {
             Ok(Self(HashMap::new()))

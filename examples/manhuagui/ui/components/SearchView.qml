@@ -4,7 +4,7 @@ import QtQuick.Layouts 1.3
 
 import "../definitions"
 
-import xofm.libs.epaper as Epaper
+// import xofm.libs.epaper as Epaper
 
 ColumnLayout {
     anchors.fill: parent
@@ -143,11 +143,11 @@ ColumnLayout {
                                 onAccepted: {
                                     Qt.inputMethod.hide();
                                 }
-                               Epaper.ScreenModeItem {
-                                   anchors.fill: parent
-                                   visible: true
-                                   mode: Epaper.ScreenModeItem.Animation
-                               }
+                               // Epaper.ScreenModeItem {
+                               //     anchors.fill: parent
+                               //     visible: true
+                               //     mode: Epaper.ScreenModeItem.Animation
+                               // }
                             }
                         }
                         Rectangle {

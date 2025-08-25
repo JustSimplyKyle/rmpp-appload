@@ -43,7 +43,19 @@ ColumnLayout {
                 pageList.row-=1;
             }
             pageList.positionViewAtIndex(pageList.row*4, GridView.Beginning);
+
         }
+
+        Connections {
+            target: StateManager
+
+            function onPageViewUpdated(TargetChapter, TargetPage) {
+                pageList.row = StateManager.currPage/4 - 1;
+                pageList.positionViewAtIndex(pageList.row*4, GridView.Beginning);
+            }
+        }
+
+        
 
         // deal with this later
         SwipeDetection {

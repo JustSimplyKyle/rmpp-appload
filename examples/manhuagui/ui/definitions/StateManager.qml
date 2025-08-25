@@ -36,6 +36,7 @@ QtObject {
 
     signal bookshelfUpdated()
     signal backendInitialized()
+    signal pageViewUpdated()
     signal pagesUpdated(int chapter, int page)
 
     function updateOrCreatePage(chapter, page, data) {

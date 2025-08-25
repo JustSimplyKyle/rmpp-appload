@@ -63,6 +63,7 @@ impl<T> Future for AbortableTask<T> {
 
 fn main() {
     unsafe { std::env::set_var("SMOL_THREADS", "4") };
+    unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
 
     block_on(Compat::new(async {
         appload_client::AppLoad::new(MyBackend::new())
@@ -126,12 +127,7 @@ impl MyBackend {
 
                 send_status!("body finished!")?;
 
-                let chapters = api
-                    .fetch_chapters(&body)
-                    .await?
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>();
+                let chapters = api.fetch_chapters(&body).await?;
 
                 let first_chapter = chapters.first().context("empty")?;
 
@@ -366,19 +362,20 @@ impl Default for State {
 impl AppLoadBackend for MyBackend {
     async fn handle_message(&mut self, functionality: &BackendReplier, message: Message) {
         let v = self.handle_message(functionality, message);
-
-        if let Err(err) = v.await {
-            let err = err
-                .chain()
-                .enumerate()
-                .map(|(i, x)| format!("{}:{x:#?}", i + 1))
-                .collect::<Vec<_>>()
-                .join("\n");
-            panic!("{err:#?}")
-            // functionality
-            //     .send_typed_message(SendMessage::Error(format!("error: {err:#?}")))
-            //     .await
-            //     .expect("can't send message");
-        }
+        v.await.unwrap();
+        // if let Err(err) = v.await {
+        // err.unwrap();
+        // let err = err
+        //     .chain()
+        //     .enumerate()
+        //     .map(|(i, x)| format!("{}:{x:#?}", i + 1))
+        //     .collect::<Vec<_>>()
+        //     .join("\n");
+        // panic!("{err:#?}")
+        // functionality
+        //     .send_typed_message(SendMessage::Error(format!("error: {err:#?}")))
+        //     .await
+        //     .expect("can't send message");
+        // }
     }
 }

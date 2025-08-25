@@ -150,6 +150,7 @@ Rectangle {
                         onClicked: () => {
                             StateManager.activePage = StateManager.ActivePage.PageList
                             settings.visible = false;
+                            StateManager.pageViewUpdated();
                         }
                     }
                     Text {
