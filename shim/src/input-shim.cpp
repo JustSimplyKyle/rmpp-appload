@@ -11,21 +11,16 @@
 #include <linux/input-event-codes.h>
 #include <linux/input.h>
 #include <vector>
+#include <set>
 #include <thread>
 #include <unistd.h>
 #include <dlfcn.h>
 #include <poll.h>
+#include <algorithm>
 
 #include "qtfb-client/qtfb-client.h"
 
 #define DEV_NULL "/dev/null"
-
-#define RM1_TOUCHSCREEN "/dev/input/event2"
-#define RM1_BUTTONS "/dev/input/event1"
-#define RM1_DIGITIZER "/dev/input/event0"
-
-#define RMPP_TOUCHSCREEN "/dev/input/event3"
-#define RMPP_DIGITIZER "/dev/input/event2"
 
 #define RM1_MAX_DIGI_X 20967
 #define RM1_MAX_DIGI_Y 15725
@@ -47,6 +42,7 @@
 
 extern qtfb::ClientConnection *clientConnection;
 extern int shimInputType;
+extern std::set<fileident_t> *identDigitizer, *identTouchScreen, *identButtons;
 
 struct TouchSlotState {
     int x, y;
@@ -142,10 +138,11 @@ static void pollInputUpdates() {
                     break;
             }
 
-            CERR << "[QTFB SHIM INPUT]: " << (int) message.userInput.inputType << ", " << message.userInput.x << ", " << message.userInput.y << std::endl;
+            CERR << "[QTFB SHIM INPUT]: " << (int) message.userInput.inputType << ", " << message.userInput.x << ", " << message.userInput.y << " (Translated to " << xTranslate << ", " << yTranslate << ")" << std::endl;
             switch(message.userInput.inputType) {
                 case INPUT_TOUCH_PRESS:
                     state_a = 1;
+                    pushToAll(QUEUE_TOUCH, evt(EV_ABS, ABS_MT_SLOT, 1));
                     pushToAll(QUEUE_TOUCH, evt(EV_ABS, ABS_MT_TRACKING_ID, 50));
                     goto sendpos;
                 case INPUT_TOUCH_RELEASE:
@@ -166,6 +163,9 @@ static void pollInputUpdates() {
                     goto sendpos;
                     break;
                 }
+
+
+
                 case INPUT_PEN_PRESS:
                     pushToAll(QUEUE_PEN, evt(EV_KEY, BTN_TOOL_PEN, 1));
                     pushToAll(QUEUE_PEN, evt(EV_KEY, BTN_TOUCH, 1));
@@ -227,38 +227,28 @@ static int createInEventMap(int type, int flags) {
     return _pipe[0];
 }
 
-int inputShimOpen(const char *file, int (*realOpen)(const char *name, int flags, mode_t mode), int flags, mode_t mode) {
-    if(shimInputType == SHIM_INPUT_RM1) {
-        if(strcmp(file, RM1_DIGITIZER) == 0) {
-            int fd = createInEventMap(QUEUE_PEN, flags);
-            CERR << "Open digitizer " << fd << std::endl;
-            return fd;
-        }
+int inputShimOpen(fileident_t identity, int flags, mode_t mode) {
+    CERR << "Check " << std::hex << identity << std::dec << std::endl;
+    #define e(n, x) CERR << n << std::endl; for(auto a : x) CERR << "- " << a << std::endl
+    e("dig", *identDigitizer);
+    e("tch", *identTouchScreen);
+    e("btn", *identButtons);
+    #undef e
+    if(identDigitizer->find(identity) != identDigitizer->end()) {
+        int fd = createInEventMap(QUEUE_PEN, flags);
+        CERR << "Open digitizer " << fd << std::endl;
+        return fd;
+    }
 
-        if(strcmp(file, RM1_TOUCHSCREEN) == 0) {
-            int fd = createInEventMap(QUEUE_TOUCH, flags);
-            CERR << "Open touchscreen " << fd << std::endl;
-            return fd;
-        }
-
-        if(strcmp(file, RM1_BUTTONS) == 0) {
-            int fd = createInEventMap(QUEUE_BUTTONS, flags);
-            CERR << "Open buttons " << fd << std::endl;
-            return fd;
-        }
-    } else if(shimInputType == SHIM_INPUT_RMPP) {
-        if(strcmp(file, RMPP_DIGITIZER) == 0) {
-            int fd = createInEventMap(QUEUE_PEN, flags);
-            CERR << "Open digitizer " << fd << std::endl;
-            return fd;
-        }
-
-        if(strcmp(file, RMPP_TOUCHSCREEN) == 0) {
-            int fd = createInEventMap(QUEUE_TOUCH, flags);
-            CERR << "Open touchscreen " << fd << std::endl;
-            return fd;
-        }
-
+    if(identTouchScreen->find(identity) != identTouchScreen->end()) {
+        int fd = createInEventMap(QUEUE_TOUCH, flags);
+        CERR << "Open touchscreen " << fd << std::endl;
+        return fd;
+    }
+    if(identButtons->find(identity) != identButtons->end()) {
+        int fd = createInEventMap(QUEUE_BUTTONS, flags);
+        CERR << "Open buttons " << fd << std::endl;
+        return fd;
     }
 
     return INTERNAL_SHIM_NOT_APPLICABLE;
@@ -337,12 +327,12 @@ int inputShimIoctl(int fd, unsigned long request, char *ptr, int (*realIoctl)(in
 
         if (IS_MATCHING_IOCTL_S(_IOC_READ, 'E', 0x40 + ABS_MT_POSITION_X, sizeof(input_absinfo))) {
             return fakeOrOverrideAbsInfo(fd, request, ptr, realIoctl,
-                                        0, RM1_MAX_TOUCH_X,
+                                        0, shimInputType == SHIM_INPUT_RM1 ? RM1_MAX_TOUCH_X : RMPP_MAX_TOUCH_X,
                                         100, 0, 0);
         }
         if (IS_MATCHING_IOCTL_S(_IOC_READ, 'E', 0x40 + ABS_MT_POSITION_Y, sizeof(input_absinfo))) {
             return fakeOrOverrideAbsInfo(fd, request, ptr, realIoctl,
-                                        0, RM1_MAX_TOUCH_Y,
+                                        0, shimInputType == SHIM_INPUT_RM1 ? RM1_MAX_TOUCH_Y : RMPP_MAX_TOUCH_Y,
                                         100, 0, 0);
         }
         if (IS_MATCHING_IOCTL_S(_IOC_READ, 'E', 0x40 + ABS_MT_ORIENTATION, sizeof(input_absinfo))) {
@@ -351,14 +341,18 @@ int inputShimIoctl(int fd, unsigned long request, char *ptr, int (*realIoctl)(in
             // int status = realIoctl(fd, request, ptr);
             absinfo->minimum = RM1_MIN_ORIENTATION;
             absinfo->maximum = RM1_MAX_ORIENTATION;
-            return 0;
+        }
+        if (IS_MATCHING_IOCTL_S(_IOC_READ, 'E', 0x40 + ABS_MT_SLOT, sizeof(input_absinfo))) {
+            struct input_absinfo *absinfo = reinterpret_cast<struct input_absinfo*>(ptr);
+            std::memset(absinfo, 0, sizeof(absinfo));
+            // int status = realIoctl(fd, request, ptr);
+            absinfo->maximum = 3;
         }
 
         if(IS_MATCHING_IOCTL(_IOC_READ, 'E', 0x6)) {
             // Get Name
             CERR << "Get device name" << std::endl;
             strncpy(ptr, "cyttsp5_mt", cmdSize);
-            return 0;
         }
 
         // pretend like we support everything the RM1 supports
@@ -369,7 +363,6 @@ int inputShimIoctl(int fd, unsigned long request, char *ptr, int (*realIoctl)(in
             unsigned long *bits = (unsigned long*) ptr;
             SETBIT(EV_ABS, bits);
             SETBIT(EV_REL, bits);
-            return 0;
         }
 
         if (cmdDir == _IOC_READ && cmdType == 'E' && cmdNr == (0x20 + EV_ABS)) {
@@ -387,10 +380,7 @@ int inputShimIoctl(int fd, unsigned long request, char *ptr, int (*realIoctl)(in
             SETBIT(ABS_MT_SLOT, bits);
             SETBIT(ABS_MT_TOOL_TYPE, bits);
             SETBIT(ABS_MT_TRACKING_ID, bits);
-
-            return 0;
         }
-        return 0;
     }
 
     if(ref->queueType == QUEUE_PEN) {
@@ -402,20 +392,54 @@ int inputShimIoctl(int fd, unsigned long request, char *ptr, int (*realIoctl)(in
             // Get Name
             CERR << "Get device name" << std::endl;
             strncpy(ptr, "Wacom I2C Digitizer", cmdSize);
-            return 0;
         }
 
         if (IS_MATCHING_IOCTL_S(_IOC_READ, 'E', 0x40 + ABS_X, sizeof(input_absinfo))) {
             return fakeOrOverrideAbsInfo(fd, request, ptr, realIoctl,
-                                        0, RM1_MAX_DIGI_X,
+                                        0, shimInputType == SHIM_INPUT_RM1 ? RM1_MAX_DIGI_X : RMPP_MAX_DIGI_X,
                                         0, 0, 0);
         }
         if (IS_MATCHING_IOCTL_S(_IOC_READ, 'E', 0x40 + ABS_Y, sizeof(input_absinfo))) {
             return fakeOrOverrideAbsInfo(fd, request, ptr, realIoctl,
-                                        0, RM1_MAX_DIGI_Y,
+                                        0, shimInputType == SHIM_INPUT_RM1 ? RM1_MAX_DIGI_Y : RMPP_MAX_DIGI_Y,
                                         0, 0, 0);
         }
-        return 0;
+
+
+        if (cmdDir == _IOC_READ && cmdType == 'E' && cmdNr == 0x20) {
+            // int status = realIoctl(fd, request, ptr);
+            // if (status < 0) return status;
+
+            unsigned long *bits = (unsigned long*) ptr;
+            SETBIT(EV_ABS, bits);
+            SETBIT(EV_KEY, bits);
+            SETBIT(EV_SYN, bits);
+        }
+        if (cmdDir == _IOC_READ && cmdType == 'E' && cmdNr == (0x20 + EV_ABS)) {
+            // int status = realIoctl(fd, request, ptr);
+            // if (status < 0) return status;
+
+            unsigned long *bits = (unsigned long*) ptr;
+
+            SETBIT(ABS_X, bits);
+            SETBIT(ABS_Y, bits);
+            SETBIT(ABS_PRESSURE, bits);
+            SETBIT(ABS_DISTANCE, bits);
+            SETBIT(ABS_TILT_X, bits);
+            SETBIT(ABS_TILT_Y, bits);
+        }
+        if (cmdDir == _IOC_READ && cmdType == 'E' && cmdNr == (0x20 + EV_KEY)) {
+            // int status = realIoctl(fd, request, ptr);
+            // if (status < 0) return status;
+
+            unsigned long *bits = (unsigned long*) ptr;
+
+            SETBIT(BTN_TOOL_PEN, bits);
+            SETBIT(BTN_TOOL_RUBBER, bits);
+            SETBIT(BTN_TOUCH, bits);
+            SETBIT(BTN_STYLUS, bits);
+            SETBIT(BTN_STYLUS2, bits);
+        }
     }
 
     if (ref->queueType == QUEUE_BUTTONS) {
@@ -425,7 +449,6 @@ int inputShimIoctl(int fd, unsigned long request, char *ptr, int (*realIoctl)(in
         if(IS_MATCHING_IOCTL(_IOC_READ, 'E', 0x6)) {
             // Get Name
             strncpy(ptr, "gpio_buttons", cmdSize);
-            return 0;
         }
 
         if (cmdDir == _IOC_READ && cmdType == 'E' && cmdNr == 0x20) {
@@ -435,8 +458,6 @@ int inputShimIoctl(int fd, unsigned long request, char *ptr, int (*realIoctl)(in
             unsigned long *bits = (unsigned long*) ptr;
             SETBIT(EV_SYN, bits);
             SETBIT(EV_KEY, bits);
-
-            return 0;
         }
 
         if (cmdDir == _IOC_READ && cmdType == 'E' && cmdNr == (0x20 + EV_KEY)) {
@@ -450,13 +471,8 @@ int inputShimIoctl(int fd, unsigned long request, char *ptr, int (*realIoctl)(in
             SETBIT(KEY_RIGHT, bits);
             SETBIT(KEY_WAKEUP, bits);
             SETBIT(KEY_POWER, bits);
-
-            return 0;
         }
-        return 0;
     }
 
-    CERR << "Unknown shim ioctl!" << std::endl;
-
-    return INTERNAL_SHIM_NOT_APPLICABLE;
+    return 0;
 }

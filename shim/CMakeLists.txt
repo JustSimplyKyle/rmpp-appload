@@ -6,6 +6,7 @@ set(QTFB_SHIM_BASE_SOURCES
     src/connection.cpp
     src/input-shim.cpp
     src/fb-shim.cpp
+    src/fileident.cpp
     src/qtfb-client/qtfb-client.cpp
     )
 

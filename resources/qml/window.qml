@@ -122,18 +122,6 @@ FocusScope {
         }
     }
 
-    /* Frame for visual feedback during resizing*/
-    Rectangle {
-        id: resizingFrame
-        width: root.width
-        height: root.height
-        border.color: "gray"
-        border.width: 2
-        visible: false
-        color: "transparent"
-        z: 102
-    }
-
     MouseArea {
         id: resizeHandle
         anchors.bottom: parent.bottom
@@ -141,7 +129,7 @@ FocusScope {
         width: 100
         height: 100
         cursorShape: Qt.SizeFDiagCursor
-        enabled: !fullscreen
+        enabled: !fullscreen && !minimized
         z: 10001
 
         property real startX: 0
@@ -150,11 +138,9 @@ FocusScope {
         onPressed: {
             startX = mouse.x
             startY = mouse.y
-            resizingFrame.visible = true
         }
 
         onReleased: {
-            resizingFrame.visible = false
             let deltaX = mouse.x - startX
             let deltaY = mouse.y - startY
 
@@ -173,23 +159,6 @@ FocusScope {
             root.width = width;
             root._height = height;
         }
-
-        /*onPositionChanged: {
-            let deltaX = mouse.x - startX
-            let deltaY = mouse.y - startY
-            let width = Math.max(minWidth, root.width + deltaX)
-            let height = Math.max(minHeight, root.height + deltaY)
-
-            if(supportsScaling){
-                resizingFrame.width = width
-                resizingFrame.height = height
-            } else {
-                let scale = Math.min(height / root.globalHeight, width / root.globalWidth);
-
-                resizingFrame.width = root.globalWidth * scale
-                resizingFrame.height = root.globalHeight * scale + topbar.height
-            }
-        }*/
     }
 
     Rectangle {
@@ -198,6 +167,7 @@ FocusScope {
         border.width: 2
         border.color: "black"
         z: 101
+        visible: !topbarDragHandle.drag.active
     }
 
     Rectangle {
@@ -205,8 +175,12 @@ FocusScope {
         visible: !fullscreen || forceTopBarVisible
         width: parent.width
         height: visible ? 75 : 0
-        color: root.focus ? "#A0A0A0" : "#707070"
+        color: "white"
         z: 2001
+
+        border.width: 2
+        border.color: "black"
+
         Text {
             id: _appName
             anchors.fill: parent
@@ -323,6 +297,7 @@ FocusScope {
         height: parent.height - topbar.height
         width: parent.width
         clip: true
+        visible: !topbarDragHandle.drag.active
 
         MouseArea {
             id: qmldiffEventBlocker

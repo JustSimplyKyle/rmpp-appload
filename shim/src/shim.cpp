@@ -1,7 +1,10 @@
 #include <stdbool.h>
 #include <dlfcn.h>
 #include <iostream>
+#include <set>
 #include <cstring>
+#include <string>
+#include <sstream>
 #include <unistd.h>
 #include "shim.h"
 #include "fb-shim.h"
@@ -9,14 +12,23 @@
 #include <sys/mman.h>
 #include "qtfb-client/common.h"
 #include "connection.h"
+#include "fileident.h"
 
 #define FAKE_MODEL "reMarkable 1.0"
 #define FILE_MODEL "/sys/devices/soc0/machine"
+
+#define RM1_TOUCHSCREEN "/dev/input/event2"
+#define RM1_BUTTONS "/dev/input/event1"
+#define RM1_DIGITIZER "/dev/input/event0"
+
+#define RMPP_TOUCHSCREEN "/dev/input/event3"
+#define RMPP_DIGITIZER "/dev/input/event2"
 
 bool shimModel;
 bool shimInput;
 bool shimFramebuffer;
 int shimInputType = SHIM_INPUT_RM1;
+std::set<fileident_t> *identDigitizer, *identTouchScreen, *identButtons;
 
 bool readEnvvarBoolean(const char *name, bool _default) {
     char *value = getenv(name);
@@ -24,6 +36,17 @@ bool readEnvvarBoolean(const char *name, bool _default) {
         return _default;
     }
     return strcmp(value, "1") == 0;
+}
+
+static void iterStringCollectToIdentities(std::set<fileident_t> *out, const char *str){
+    std::string src(str);
+    std::istringstream ss(src);
+    std::string temp;
+    while(std::getline(ss, temp, ',')) {
+        fileident_t ident = getFileIdentityFromPath(temp.c_str());
+        if(ident != 0 && ident != -1)
+            out->insert(ident);
+    }
 }
 
 void __attribute__((constructor)) __construct () {
@@ -40,6 +63,10 @@ void __attribute__((constructor)) __construct () {
     shimModel = readEnvvarBoolean("QTFB_SHIM_MODEL", true);
     shimInput = readEnvvarBoolean("QTFB_SHIM_INPUT", true);
     shimFramebuffer = readEnvvarBoolean("QTFB_SHIM_FB", true);
+
+    identDigitizer = new std::set<fileident_t>();
+    identTouchScreen = new std::set<fileident_t>();
+    identButtons = new std::set<fileident_t>();
 
     char *fbMode = getenv("QTFB_SHIM_MODE");
     if(fbMode != NULL) {
@@ -67,6 +94,43 @@ void __attribute__((constructor)) __construct () {
     }
 
 
+    const char *pathDigitizer, *pathTouchScreen, *pathButtons;
+
+    if(shimInputType == SHIM_INPUT_RM1) {
+        pathDigitizer = RM1_DIGITIZER;
+        pathTouchScreen = RM1_TOUCHSCREEN;
+        pathButtons = RM1_BUTTONS;
+    } else if(shimInputType == SHIM_INPUT_RMPP) {
+        pathDigitizer = RMPP_DIGITIZER;
+        pathTouchScreen = RMPP_TOUCHSCREEN;
+        pathButtons = "<NONEXISTENT>";
+    }
+
+    const char *temp;
+    fileident_t ti;
+    if(temp = getenv("QTFB_SHIM_INPUT_PATH_DIGITIZER")) {
+        iterStringCollectToIdentities(identDigitizer, temp);
+    }
+    else if((ti = getFileIdentityFromPath(pathDigitizer)) != -1) identDigitizer->emplace(ti);
+    if(temp = getenv("QTFB_SHIM_INPUT_PATH_TOUCHSCREEN")) {
+        iterStringCollectToIdentities(identTouchScreen, temp);
+    }
+    else if((ti = getFileIdentityFromPath(pathTouchScreen)) != -1) identTouchScreen->emplace(ti);
+    if(temp = getenv("QTFB_SHIM_INPUT_PATH_BUTTONS")) {
+        iterStringCollectToIdentities(identButtons, temp);
+    }
+    else if((ti = getFileIdentityFromPath(pathButtons)) != -1) identButtons->emplace(ti);
+    for(const auto e : *identDigitizer) {
+        CERR << std::hex << "Ident dig: " << e << std::endl;
+    }
+    for(const auto e : *identTouchScreen) {
+        CERR << "Ident touch: " << e << std::endl;
+    }
+    for(const auto e : *identButtons) {
+        CERR << "Ident btn: " << e << std::endl;
+    }
+    std::cerr << std::dec;
+
     connectShim();
     startPollingThread();
 }
@@ -89,8 +153,8 @@ int spoofModelFD() {
     return modelSpoofFD;
 }
 
-static int (*realOpen)(const char *, int, mode_t) = (int (*)(const char *, int, mode_t)) dlsym(RTLD_NEXT, "open");
-inline int handleOpen(const char *fileName, int flags, mode_t mode) {
+inline int handleOpen(const char *fileName, fileident_t identity, int flags, mode_t mode) {
+    CERR << "Open() " << fileName << ", " << std::hex << identity << std::dec << std::endl;
     if(shimModel)
         if(strcmp(fileName, FILE_MODEL) == 0 && shimModel) {
             return spoofModelFD();
@@ -103,7 +167,7 @@ inline int handleOpen(const char *fileName, int flags, mode_t mode) {
         }
 
     if(shimInput)
-        if((status = inputShimOpen(fileName, realOpen, flags, mode)) != INTERNAL_SHIM_NOT_APPLICABLE) {
+        if((status = inputShimOpen(identity, flags, mode)) != INTERNAL_SHIM_NOT_APPLICABLE) {
             CERR << "[INPUT] FD ret'd: " << status << std::endl;
             return status;
         }
@@ -159,54 +223,76 @@ extern "C" int __ioctl_time64(int fd, unsigned long request, char *ptr) {
     return realIoctl(fd, request, ptr);
 }
 
-
-extern "C" int open64(const char *fileName, int flags, mode_t mode) {
-    static int (*realOpen64)(const char *, int, mode_t) = (int (*)(const char *, int, mode_t)) dlsym(RTLD_NEXT, "open64");
-    int fd;
-    if((fd = handleOpen(fileName, flags, mode)) != INTERNAL_SHIM_NOT_APPLICABLE) {
-        return fd;
-    }
-
-    return realOpen64(fileName, flags, mode);
-}
-
 extern "C" int openat(int dirfd, const char *fileName, int flags, mode_t mode) {
     static int (*realOpenat)(int, const char *, int, mode_t) = (int (*)(int, const char *, int, mode_t)) dlsym(RTLD_NEXT, "openat");
-    int fd;
-    if((fd = handleOpen(fileName, flags, mode)) != INTERNAL_SHIM_NOT_APPLICABLE) {
-        return fd;
-    }
+    int fd = realOpenat(dirfd, fileName, flags, mode), fdo;
 
-    return realOpenat(dirfd, fileName, flags, mode);
+    if((fdo = handleOpen(fileName, getFileIdentity(fd), flags, mode)) != INTERNAL_SHIM_NOT_APPLICABLE) {
+        close(fd);
+        return fdo;
+    }
+    return fd;
+}
+
+extern "C" int openat64(int dirfd, const char *fileName, int flags, mode_t mode) {
+    static int (*realOpenat)(int, const char *, int, mode_t) = (int (*)(int, const char *, int, mode_t)) dlsym(RTLD_NEXT, "openat64");
+    int fd = realOpenat(dirfd, fileName, flags, mode), fdo;
+
+    if((fdo = handleOpen(fileName, getFileIdentity(fd), flags, mode)) != INTERNAL_SHIM_NOT_APPLICABLE) {
+        close(fd);
+        return fdo;
+    }
+    return fd;
 }
 
 extern "C" int open(const char *fileName, int flags, mode_t mode) {
-    int fd;
-    if((fd = handleOpen(fileName, flags, mode)) != INTERNAL_SHIM_NOT_APPLICABLE) {
-        return fd;
+    static int (*realOpen)(const char *, int, mode_t) = (int (*)(const char *, int, mode_t)) dlsym(RTLD_NEXT, "open");
+    int fd = realOpen(fileName, flags, mode), fdo;
+
+    if((fdo = handleOpen(fileName, getFileIdentity(fd), flags, mode)) != INTERNAL_SHIM_NOT_APPLICABLE) {
+        close(fd);
+        return fdo;
     }
 
-    return realOpen(fileName, flags, mode);
+    return fd;
+}
+
+extern "C" int open64(const char *fileName, int flags, mode_t mode) {
+    static int (*realOpen64)(const char *, int, mode_t) = (int (*)(const char *, int, mode_t)) dlsym(RTLD_NEXT, "open64");
+    int fd = realOpen64(fileName, flags, mode), fdo;
+
+    if((fdo = handleOpen(fileName, getFileIdentity(fd), flags, mode)) != INTERNAL_SHIM_NOT_APPLICABLE) {
+        close(fd);
+        return fdo;
+    }
+
+    return fd;
 }
 
 extern "C" FILE *fopen(const char *fileName, const char *mode) {
     static FILE *(*realFopen)(const char *, const char *) = (FILE *(*)(const char *, const char *)) dlsym(RTLD_NEXT, "fopen");
-    int fd;
-    if((fd = handleOpen(fileName, 0, 0)) != INTERNAL_SHIM_NOT_APPLICABLE) {
-        return fdopen(fd, mode);
+    FILE *real = realFopen(fileName, mode);
+    int fdo;
+    if(real == NULL) return real;
+    if((fdo = handleOpen(fileName, getFileIdentity(fileno(real)), 0, 0)) != INTERNAL_SHIM_NOT_APPLICABLE) {
+        fclose(real);
+        return fdopen(fdo, mode);
     }
 
-    return realFopen(fileName, mode);
+    return real;
 }
 
 #if (__BITS_PER_LONG != 32)
 extern "C" FILE *fopen64(const char *fileName, const char *mode) {
     static FILE *(*realFopen)(const char *, const char *) = (FILE *(*)(const char *, const char *)) dlsym(RTLD_NEXT, "fopen64");
-    int fd;
-    if((fd = handleOpen(fileName, 0, 0)) != INTERNAL_SHIM_NOT_APPLICABLE) {
-        return fdopen(fd, mode);
+    FILE *real = realFopen(fileName, mode);
+    int fdo;
+    if(real == NULL) return real;
+    if((fdo = handleOpen(fileName, getFileIdentity(fileno(real)), 0, 0)) != INTERNAL_SHIM_NOT_APPLICABLE) {
+        fclose(real);
+        return fdopen(fdo, mode);
     }
 
-    return realFopen(fileName, mode);
+    return real;
 }
 #endif
